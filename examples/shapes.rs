@@ -1,4 +1,4 @@
-use lite_render_2d_core::{Color, Renderer};
+use lite_render_2d_core::{Color, DrawParams, LineParams, Rect, Renderer, Vec2};
 use lite_render_2d_glow::GlowRenderer;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -35,6 +35,56 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 if let Some(ren) = &mut self.renderer {
                     ren.begin_frame().expect("begin frame");
+
+                    // -- rects --
+                    ren.draw_rect(
+                        Rect { pos: Vec2::new(50.0, 50.0), size: Vec2::new(200.0, 120.0) },
+                        DrawParams::fill(Color::RED),
+                    );
+                    ren.draw_rect(
+                        Rect { pos: Vec2::new(300.0, 50.0), size: Vec2::new(160.0, 160.0) },
+                        DrawParams::stroke(Color::GREEN, 3.0),
+                    );
+                    // semi-transparent rect
+                    ren.draw_rect(
+                        Rect { pos: Vec2::new(120.0, 100.0), size: Vec2::new(180.0, 100.0) },
+                        DrawParams::fill(Color::new(1.0, 1.0, 0.0, 1.0)).with_opacity(0.5),
+                    );
+
+                    // -- circles --
+                    ren.draw_circle(
+                        Vec2::new(150.0, 320.0),
+                        60.0,
+                        DrawParams::fill(Color::BLUE),
+                    );
+                    ren.draw_circle(
+                        Vec2::new(350.0, 320.0),
+                        50.0,
+                        DrawParams::stroke(Color::WHITE, 4.0),
+                    );
+                    ren.draw_circle(
+                        Vec2::new(530.0, 320.0),
+                        45.0,
+                        DrawParams::fill(Color::new(0.0, 0.8, 0.6, 1.0)),
+                    );
+
+                    // -- lines --
+                    ren.draw_line(
+                        Vec2::new(50.0, 450.0),
+                        Vec2::new(550.0, 450.0),
+                        LineParams::new(Color::WHITE, 2.0),
+                    );
+                    ren.draw_line(
+                        Vec2::new(50.0, 480.0),
+                        Vec2::new(400.0, 540.0),
+                        LineParams::new(Color::new(1.0, 0.5, 0.0, 1.0), 5.0),
+                    );
+                    ren.draw_line(
+                        Vec2::new(300.0, 200.0),
+                        Vec2::new(500.0, 400.0),
+                        LineParams::new(Color::new(1.0, 0.0, 0.8, 1.0), 3.0),
+                    );
+
                     ren.end_frame().expect("end frame");
                 }
                 if let Some(win) = &self.window {
