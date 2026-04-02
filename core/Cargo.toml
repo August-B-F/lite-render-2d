@@ -6,3 +6,10 @@ edition = "2021"
 [dependencies]
 thiserror = { workspace = true }
 winit = { workspace = true }
+lyon_tessellation = { workspace = true, optional = true }
+fontdue = { workspace = true, optional = true }
+
+[features]
+default = ["paths", "text"]
+paths = ["dep:lyon_tessellation"]
+text = ["dep:fontdue"]

@@ -1,6 +1,12 @@
 pub mod camera;
+#[cfg(feature = "text")]
+pub mod font_atlas;
+#[cfg(feature = "paths")]
+pub mod path_tessellation;
 pub mod renderer;
+pub mod tessellation;
 pub mod text;
+pub mod transform_stack;
 pub mod texture;
 pub mod types;
 

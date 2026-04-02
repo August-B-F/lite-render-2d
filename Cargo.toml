@@ -14,4 +14,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 wgpu = "24"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
+lyon_tessellation = "1"
+fontdue = "0.9"
 lite-render-2d-core = { path = "core" }

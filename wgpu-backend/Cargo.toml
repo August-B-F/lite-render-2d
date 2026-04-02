@@ -27,3 +27,11 @@ path = "../examples/sprites.rs"
 [[example]]
 name = "mixed"
 path = "../examples/mixed.rs"
+
+[[example]]
+name = "new_features"
+path = "../examples/new_features.rs"
+
+[[example]]
+name = "advanced_features"
+path = "../examples/advanced_features.rs"

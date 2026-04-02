@@ -44,6 +44,27 @@ pub struct GlowRenderer {
     // texture storage
     textures: HashMap<u64, TextureInfo>,
     next_tex_id: u64,
+    // font system
+    font_system: lite_render_2d_core::font_atlas::FontSystem,
+    font_atlas_tex_id: Option<u64>,
+    // transform stack
+    transform_stack: lite_render_2d_core::transform_stack::TransformStack,
+    // clip rect stack (pixel coords)
+    clip_stack: Vec<[u32; 4]>,
+    current_clip: Option<[u32; 4]>,
+    // blend mode
+    current_blend: BlendMode,
+}
+
+fn intersect_rects(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    if x1 <= x0 || y1 <= y0 {
+        return [0, 0, 0, 0];
+    }
+    [x0, y0, x1 - x0, y1 - y0]
 }
 
 // y-down screen ortho, origin top-left
@@ -66,6 +87,37 @@ impl GlowRenderer {
 
     pub fn draw_calls(&self) -> u32 {
         self.batcher.draw_calls()
+    }
+}
+
+impl GlowRenderer {
+    fn apply_transform_quad(&self, verts: &mut [f32; 72]) {
+        if self.transform_stack.is_identity() {
+            return;
+        }
+        for i in 0..6 {
+            let base = i * 12;
+            let p = self.transform_stack.apply(Vec2::new(verts[base], verts[base + 1]));
+            verts[base] = p.x;
+            verts[base + 1] = p.y;
+        }
+    }
+
+    fn push_shape_raw_transformed(&mut self, verts: &mut Vec<f32>, z_index: i32, blend: BlendMode) {
+        lite_render_2d_core::tessellation::apply_transform(verts, &self.transform_stack);
+        self.batcher.push_shape_raw(verts, z_index, blend, self.current_clip);
+    }
+
+    fn apply_transform_sprite(&self, verts: &mut [f32; 54]) {
+        if self.transform_stack.is_identity() {
+            return;
+        }
+        for i in 0..6 {
+            let base = i * 9;
+            let p = self.transform_stack.apply(Vec2::new(verts[base], verts[base + 1]));
+            verts[base] = p.x;
+            verts[base + 1] = p.y;
+        }
     }
 }
 
@@ -169,6 +221,12 @@ impl Renderer for GlowRenderer {
             batcher: Batcher::new(),
             textures: HashMap::new(),
             next_tex_id: 1,
+            font_system: lite_render_2d_core::font_atlas::FontSystem::new(),
+            font_atlas_tex_id: None,
+            transform_stack: lite_render_2d_core::transform_stack::TransformStack::new(),
+            clip_stack: Vec::new(),
+            current_clip: None,
+            current_blend: BlendMode::Alpha,
         })
     }
 
@@ -194,26 +252,50 @@ impl Renderer for GlowRenderer {
         self.clear_color = color;
     }
 
-    fn set_blend_mode(&mut self, _mode: BlendMode) {}
+    fn set_blend_mode(&mut self, mode: BlendMode) {
+        self.current_blend = mode;
+    }
 
     fn begin_frame(&mut self) -> Result<(), RendererError> {
         self.batcher.clear();
         let c = self.clear_color;
         unsafe {
-            self.gl.enable(glow::BLEND);
-            self.gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             self.gl.clear_color(c.r, c.g, c.b, c.a);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
         }
         Ok(())
     }
 
-    fn push_transform(&mut self, _transform: Transform2D) {}
-    fn pop_transform(&mut self) {}
-    fn reset_transform(&mut self) {}
+    fn push_transform(&mut self, transform: Transform2D) {
+        self.transform_stack.push(transform);
+    }
+    fn pop_transform(&mut self) {
+        self.transform_stack.pop();
+    }
+    fn reset_transform(&mut self) {
+        self.transform_stack.reset();
+    }
 
-    fn push_clip_rect(&mut self, _rect: Rect) {}
-    fn pop_clip_rect(&mut self) {}
+    fn push_clip_rect(&mut self, rect: Rect) {
+        let new_clip = [
+            rect.pos.x.max(0.0) as u32,
+            rect.pos.y.max(0.0) as u32,
+            rect.size.x.max(0.0) as u32,
+            rect.size.y.max(0.0) as u32,
+        ];
+        // intersec with parent clip if any
+        let clipped = match self.current_clip {
+            Some(parent) => intersect_rects(parent, new_clip),
+            None => new_clip,
+        };
+        self.clip_stack.push(clipped);
+        self.current_clip = Some(clipped);
+    }
+
+    fn pop_clip_rect(&mut self) {
+        self.clip_stack.pop();
+        self.current_clip = self.clip_stack.last().copied();
+    }
 
     fn draw_rect(&mut self, rect: Rect, params: DrawParams) {
         let (color, mode, stroke_w) = match params.style {
@@ -227,7 +309,16 @@ impl Renderer for GlowRenderer {
                 c.a *= params.opacity;
                 (c, 1.0, sp.thickness)
             }
-            _ => return,
+            DrawStyle::LinearGradient { color_start, .. } => {
+                let mut c = color_start;
+                c.a *= params.opacity;
+                (c, 0.0, 0.0)
+            }
+            DrawStyle::RadialGradient { color_inner, .. } => {
+                let mut c = color_inner;
+                c.a *= params.opacity;
+                (c, 0.0, 0.0)
+            }
         };
 
         let x = rect.pos.x;
@@ -237,7 +328,7 @@ impl Renderer for GlowRenderer {
 
         // 6 verts × 12 floats = 72
         #[rustfmt::skip]
-        let verts: [f32; 72] = [
+        let mut verts: [f32; 72] = [
             // v0: top-left
             x,     y,     0.0, 0.0,  color.r, color.g, color.b, color.a,  mode, stroke_w, w, h,
             // v1: top-right
@@ -252,10 +343,32 @@ impl Renderer for GlowRenderer {
             x,     y + h, 0.0, h,    color.r, color.g, color.b, color.a,  mode, stroke_w, w, h,
         ];
 
-        self.batcher.push_shape(&verts);
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.apply_transform_quad(&mut verts);
+        self.batcher.push_shape(&verts, params.z_index, params.blend, self.current_clip);
     }
 
-    fn draw_rounded_rect(&mut self, _rrect: RoundedRect, _params: DrawParams) {}
+    fn draw_rounded_rect(&mut self, rrect: RoundedRect, params: DrawParams) {
+        let mut verts = match params.style {
+            DrawStyle::Fill(c) => {
+                let mut c = c;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_rounded_rect_fill(rrect, c)
+            }
+            DrawStyle::Stroke(ref sp) => {
+                let mut sp = *sp;
+                sp.color.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_rounded_rect_stroke(rrect, &sp)
+            }
+            DrawStyle::LinearGradient { color_start, .. } | DrawStyle::RadialGradient { color_inner: color_start, .. } => {
+                let mut c = color_start;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_rounded_rect_fill(rrect, c)
+            }
+        };
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.push_shape_raw_transformed(&mut verts, params.z_index, params.blend);
+    }
 
     fn draw_circle(&mut self, center: Vec2, radius: f32, params: DrawParams) {
         let (color, mode, stroke_w_norm) = match params.style {
@@ -271,7 +384,16 @@ impl Renderer for GlowRenderer {
                 let norm = 1.0 - sp.thickness / radius;
                 (c, 3.0, norm)
             }
-            _ => return,
+            DrawStyle::LinearGradient { color_start, .. } => {
+                let mut c = color_start;
+                c.a *= params.opacity;
+                (c, 2.0, 0.0)
+            }
+            DrawStyle::RadialGradient { color_inner, .. } => {
+                let mut c = color_inner;
+                c.a *= params.opacity;
+                (c, 2.0, 0.0)
+            }
         };
 
         // pad quad slightly for aa fringe
@@ -282,7 +404,7 @@ impl Renderer for GlowRenderer {
         let ln = ext / radius;
 
         #[rustfmt::skip]
-        let verts: [f32; 72] = [
+        let mut verts: [f32; 72] = [
             cx - ext, cy - ext, -ln, -ln,  color.r, color.g, color.b, color.a,  mode, stroke_w_norm, 0.0, 0.0,
             cx + ext, cy - ext,  ln, -ln,  color.r, color.g, color.b, color.a,  mode, stroke_w_norm, 0.0, 0.0,
             cx + ext, cy + ext,  ln,  ln,  color.r, color.g, color.b, color.a,  mode, stroke_w_norm, 0.0, 0.0,
@@ -291,21 +413,105 @@ impl Renderer for GlowRenderer {
             cx - ext, cy + ext, -ln,  ln,  color.r, color.g, color.b, color.a,  mode, stroke_w_norm, 0.0, 0.0,
         ];
 
-        self.batcher.push_shape(&verts);
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.apply_transform_quad(&mut verts);
+        self.batcher.push_shape(&verts, params.z_index, params.blend, self.current_clip);
     }
 
-    fn draw_ellipse(&mut self, _center: Vec2, _radii: Vec2, _params: DrawParams) {}
+    fn draw_ellipse(&mut self, center: Vec2, radii: Vec2, params: DrawParams) {
+        let mut verts = match params.style {
+            DrawStyle::Fill(c) => {
+                let mut c = c;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_ellipse_fill(center, radii, c)
+            }
+            DrawStyle::Stroke(ref sp) => {
+                let mut sp = *sp;
+                sp.color.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_ellipse_stroke(center, radii, &sp)
+            }
+            DrawStyle::LinearGradient { color_start, .. } | DrawStyle::RadialGradient { color_inner: color_start, .. } => {
+                let mut c = color_start;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_ellipse_fill(center, radii, c)
+            }
+        };
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.push_shape_raw_transformed(&mut verts, params.z_index, params.blend);
+    }
+
     fn draw_arc(
         &mut self,
-        _center: Vec2,
-        _radius: f32,
-        _start_angle: f32,
-        _end_angle: f32,
-        _params: DrawParams,
+        center: Vec2,
+        radius: f32,
+        start_angle: f32,
+        end_angle: f32,
+        params: DrawParams,
     ) {
+        let mut verts = match params.style {
+            DrawStyle::Fill(c) => {
+                let mut c = c;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_arc_fill(center, radius, start_angle, end_angle, c)
+            }
+            DrawStyle::Stroke(ref sp) => {
+                let mut sp = *sp;
+                sp.color.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_arc_stroke(center, radius, start_angle, end_angle, &sp)
+            }
+            DrawStyle::LinearGradient { color_start, .. } | DrawStyle::RadialGradient { color_inner: color_start, .. } => {
+                let mut c = color_start;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_arc_fill(center, radius, start_angle, end_angle, c)
+            }
+        };
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.push_shape_raw_transformed(&mut verts, params.z_index, params.blend);
     }
-    fn draw_polygon(&mut self, _points: &[Vec2], _params: DrawParams) {}
-    fn draw_triangle(&mut self, _a: Vec2, _b: Vec2, _c: Vec2, _params: DrawParams) {}
+
+    fn draw_polygon(&mut self, points: &[Vec2], params: DrawParams) {
+        let mut verts = match params.style {
+            DrawStyle::Fill(c) => {
+                let mut c = c;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_convex_polygon(points, c)
+            }
+            DrawStyle::Stroke(ref sp) => {
+                let mut sp = *sp;
+                sp.color.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_polygon_stroke(points, &sp)
+            }
+            DrawStyle::LinearGradient { color_start, .. } | DrawStyle::RadialGradient { color_inner: color_start, .. } => {
+                let mut c = color_start;
+                c.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_convex_polygon(points, c)
+            }
+        };
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.push_shape_raw_transformed(&mut verts, params.z_index, params.blend);
+    }
+
+    fn draw_triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, params: DrawParams) {
+        let mut verts = match params.style {
+            DrawStyle::Fill(col) => {
+                let mut col = col;
+                col.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_triangle(a, b, c, col)
+            }
+            DrawStyle::Stroke(ref sp) => {
+                let mut sp = *sp;
+                sp.color.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_triangle_stroke(a, b, c, &sp)
+            }
+            DrawStyle::LinearGradient { color_start, .. } | DrawStyle::RadialGradient { color_inner: color_start, .. } => {
+                let mut col = color_start;
+                col.a *= params.opacity;
+                lite_render_2d_core::tessellation::tessellate_triangle(a, b, c, col)
+            }
+        };
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.push_shape_raw_transformed(&mut verts, params.z_index, params.blend);
+    }
 
     fn draw_line(&mut self, from: Vec2, to: Vec2, params: LineParams) {
         let dx = to.x - from.x;
@@ -325,7 +531,7 @@ impl Renderer for GlowRenderer {
         let mode = 4.0_f32;
 
         #[rustfmt::skip]
-        let verts: [f32; 72] = [
+        let mut verts: [f32; 72] = [
             from.x + nx, from.y + ny, 0.0, 0.0,  color.r, color.g, color.b, color.a,  mode, 0.0, 0.0, 0.0,
             from.x - nx, from.y - ny, 0.0, 0.0,  color.r, color.g, color.b, color.a,  mode, 0.0, 0.0, 0.0,
             to.x + nx,   to.y + ny,   0.0, 0.0,  color.r, color.g, color.b, color.a,  mode, 0.0, 0.0, 0.0,
@@ -334,12 +540,50 @@ impl Renderer for GlowRenderer {
             to.x - nx,   to.y - ny,   0.0, 0.0,  color.r, color.g, color.b, color.a,  mode, 0.0, 0.0, 0.0,
         ];
 
-        self.batcher.push_shape(&verts);
+        self.apply_transform_quad(&mut verts);
+        self.batcher.push_shape(&verts, params.z_index, params.blend, self.current_clip);
     }
 
-    fn draw_polyline(&mut self, _points: &[Vec2], _params: LineParams) {}
-    fn draw_path(&mut self, _path: &Path, _params: DrawParams) {}
-    fn stroke_path(&mut self, _path: &Path, _params: StrokeParams) {}
+    fn draw_polyline(&mut self, points: &[Vec2], params: LineParams) {
+        let z_index = params.z_index;
+        let blend = params.blend;
+        let mut params = params;
+        params.color.a *= params.opacity;
+        let mut verts = lite_render_2d_core::tessellation::tessellate_polyline(points, &params);
+        self.push_shape_raw_transformed(&mut verts, z_index, blend);
+    }
+
+    fn draw_path(&mut self, path: &Path, params: DrawParams) {
+        let color = match params.style {
+            DrawStyle::Fill(c) => {
+                let mut c = c;
+                c.a *= params.opacity;
+                c
+            }
+            DrawStyle::Stroke(ref sp) => {
+                let mut sp = *sp;
+                sp.color.a *= params.opacity;
+                let mut verts = lite_render_2d_core::path_tessellation::tessellate_path_stroke(path, &sp);
+                self.push_shape_raw_transformed(&mut verts, params.z_index, params.blend);
+                return;
+            }
+            DrawStyle::LinearGradient { color_start, .. } | DrawStyle::RadialGradient { color_inner: color_start, .. } => {
+                let mut c = color_start;
+                c.a *= params.opacity;
+                c
+            }
+        };
+        let mut verts = lite_render_2d_core::path_tessellation::tessellate_path_fill(path, color);
+        lite_render_2d_core::tessellation::apply_gradient(&mut verts, &params.style);
+        self.push_shape_raw_transformed(&mut verts, params.z_index, params.blend);
+    }
+
+    fn stroke_path(&mut self, path: &Path, params: StrokeParams) {
+        let mut params = params;
+        params.color.a *= 1.0;
+        let mut verts = lite_render_2d_core::path_tessellation::tessellate_path_stroke(path, &params);
+        self.push_shape_raw_transformed(&mut verts, 0, BlendMode::Alpha);
+    }
 
     fn load_texture(
         &mut self,
@@ -463,7 +707,7 @@ impl Renderer for GlowRenderer {
 
         // 6 verts × 9 floats = 54
         #[rustfmt::skip]
-        let verts: [f32; 54] = [
+        let mut verts: [f32; 54] = [
             x0, y0, u0, v0, r, g, b, a, op,
             x1, y1, u1, v1, r, g, b, a, op,
             x2, y2, u2, v2, r, g, b, a, op,
@@ -472,18 +716,91 @@ impl Renderer for GlowRenderer {
             x3, y3, u3, v3, r, g, b, a, op,
         ];
 
-        self.batcher.push_sprite(handle.id(), &verts);
+        self.apply_transform_sprite(&mut verts);
+        self.batcher.push_sprite(handle.id(), &verts, params.z_index, params.blend, self.current_clip);
     }
 
-    fn load_font(&mut self, _data: &[u8]) -> Result<FontHandle, RendererError> {
-        Ok(FontHandle::new(0))
+    fn load_font(&mut self, data: &[u8]) -> Result<FontHandle, RendererError> {
+        self.font_system.load_font(data).map_err(|e| RendererError::Font(e))
     }
 
-    fn unload_font(&mut self, _handle: FontHandle) {}
-    fn draw_text(&mut self, _text: &str, _params: &TextParams) {}
+    fn unload_font(&mut self, handle: FontHandle) {
+        self.font_system.unload_font(handle);
+    }
 
-    fn measure_text(&self, _text: &str, _params: &TextParams) -> Vec2 {
-        Vec2::ZERO
+    fn draw_text(&mut self, text: &str, params: &TextParams) {
+        let quads = self.font_system.layout_text(text, params);
+        if quads.is_empty() {
+            return;
+        }
+
+        // ensure atlas texture is uploaded
+        if self.font_system.is_atlas_dirty() || self.font_atlas_tex_id.is_none() {
+            let (data, w, h) = self.font_system.atlas_texture_data();
+            // delete old atlas texture if any
+            if let Some(old_id) = self.font_atlas_tex_id.take() {
+                if let Some(info) = self.textures.remove(&old_id) {
+                    unsafe { self.gl.delete_texture(info.gl_tex); }
+                }
+            }
+            let gl_tex = unsafe {
+                let tex = self.gl.create_texture().expect("create atlas tex");
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                self.gl.tex_image_2d(
+                    glow::TEXTURE_2D, 0, glow::RGBA8 as i32,
+                    w as i32, h as i32, 0,
+                    glow::RGBA, glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(data)),
+                );
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+                self.gl.bind_texture(glow::TEXTURE_2D, None);
+                tex
+            };
+            let id = self.next_tex_id;
+            self.next_tex_id += 1;
+            self.textures.insert(id, TextureInfo { gl_tex, width: w, height: h });
+            self.font_atlas_tex_id = Some(id);
+            self.font_system.clear_dirty();
+        }
+
+        let atlas_id = self.font_atlas_tex_id.unwrap();
+
+        // emit each glyph as a sprite quad
+        for q in &quads {
+            let x = q.pos.x;
+            let y = q.pos.y;
+            let w = q.size.x;
+            let h = q.size.y;
+            let u0 = q.uv.pos.x;
+            let v0 = q.uv.pos.y;
+            let u1 = u0 + q.uv.size.x;
+            let v1 = v0 + q.uv.size.y;
+            let r = q.color.r;
+            let g = q.color.g;
+            let b = q.color.b;
+            let a = q.color.a;
+
+            #[rustfmt::skip]
+            let verts: [f32; 54] = [
+                x,     y,     u0, v0, r, g, b, a, 1.0,
+                x + w, y,     u1, v0, r, g, b, a, 1.0,
+                x + w, y + h, u1, v1, r, g, b, a, 1.0,
+                x,     y,     u0, v0, r, g, b, a, 1.0,
+                x + w, y + h, u1, v1, r, g, b, a, 1.0,
+                x,     y + h, u0, v1, r, g, b, a, 1.0,
+            ];
+
+            self.batcher.push_sprite(atlas_id, &verts, 0, BlendMode::Alpha, self.current_clip);
+        }
+    }
+
+    fn measure_text(&self, text: &str, params: &TextParams) -> Vec2 {
+        // measure_text needs &mut self for glyph caching, but trait says &self
+        // for now, return approximate based on font size
+        Vec2::new(text.len() as f32 * params.size * 0.5, params.size)
     }
 
     fn end_frame(&mut self) -> Result<(), RendererError> {
@@ -500,6 +817,7 @@ impl Renderer for GlowRenderer {
             sprite_loc_proj: &self.sprite_loc_proj,
             sprite_loc_tex: &self.sprite_loc_tex,
             textures: &tex_map,
+            viewport_h: self.h,
         };
         self.batcher.flush(&ctx);
 
