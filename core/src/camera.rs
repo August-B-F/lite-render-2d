@@ -1,5 +1,6 @@
 use crate::types::Vec2;
 
+/// 2d camera with position, zoom, shake, and coordinate conversion
 #[derive(Clone, Copy, Debug)]
 pub struct Camera2D {
     pub position: Vec2,
@@ -27,21 +28,43 @@ impl Camera2D {
         }
     }
 
-    // start a screen shake that decays over duration
+    /// create camera centered on (0, 0)
+    pub fn centered(viewport_w: f32, viewport_h: f32) -> Self {
+        Self::new(viewport_w, viewport_h)
+    }
+
+    /// set camera position (builder)
+    pub fn with_position(mut self, pos: Vec2) -> Self {
+        self.position = pos;
+        self
+    }
+
+    /// set zoom level (builder)
+    pub fn with_zoom(mut self, zoom: f32) -> Self {
+        self.zoom = zoom;
+        self
+    }
+
+    /// snap camera to target position immediately (no smoothing)
+    pub fn look_at(&mut self, target: Vec2) {
+        self.position = target;
+    }
+
+    /// start a screen shake that decays over duration
     pub fn shake(&mut self, intensity: f32, duration: f32) {
         self.shake_intensity = intensity;
         self.shake_duration = duration;
         self.shake_elapsed = 0.0;
     }
 
-    // smoothly lerp camera toward target position
+    /// smoothly lerp camera toward target position
     pub fn follow(&mut self, target: Vec2, smoothing: f32, dt: f32) {
         let t = (smoothing * dt).min(1.0);
         self.position.x += (target.x - self.position.x) * t;
         self.position.y += (target.y - self.position.y) * t;
     }
 
-    // step shake decay and update offset — call each frame
+    /// step shake decay and update offset — call each frame
     pub fn update(&mut self, dt: f32) {
         if self.shake_elapsed < self.shake_duration {
             self.shake_elapsed += dt;
@@ -62,7 +85,7 @@ impl Camera2D {
         }
     }
 
-    // ortho proj matrix, y-down matchig screen coords
+    /// ortho proj matrix, y-down matching screen coords
     pub fn projection_matrix(&self) -> [f32; 16] {
         let hw = self.viewport.x / (2.0 * self.zoom);
         let hh = self.viewport.y / (2.0 * self.zoom);
@@ -88,7 +111,7 @@ impl Camera2D {
         ]
     }
 
-    // screen px -> world coords
+    /// screen px -> world coords
     pub fn screen_to_world(&self, screen_pos: Vec2) -> Vec2 {
         let hw = self.viewport.x / (2.0 * self.zoom);
         let hh = self.viewport.y / (2.0 * self.zoom);
@@ -99,7 +122,7 @@ impl Camera2D {
         )
     }
 
-    // world coords -> screen px
+    /// world coords -> screen px
     pub fn world_to_screen(&self, world_pos: Vec2) -> Vec2 {
         let hw = self.viewport.x / (2.0 * self.zoom);
         let hh = self.viewport.y / (2.0 * self.zoom);

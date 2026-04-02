@@ -17,6 +17,10 @@ image = { workspace = true }
 winit = { workspace = true }
 
 [[example]]
+name = "hello"
+path = "../examples/hello.rs"
+
+[[example]]
 name = "shapes"
 path = "../examples/shapes.rs"
 
@@ -43,6 +47,14 @@ path = "../examples/feature_showcase.rs"
 [[example]]
 name = "next_features"
 path = "../examples/next_features.rs"
+
+[[example]]
+name = "interactive"
+path = "../examples/interactive.rs"
+
+[[example]]
+name = "benchmark_simple"
+path = "../examples/benchmark_simple.rs"
 
 [[example]]
 name = "all_new_features"

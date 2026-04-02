@@ -1,7 +1,7 @@
 use crate::types::{Rect, Vec2};
 
 impl Rect {
-    // check if point is inside this rect
+    /// check if point is inside this rect
     pub fn contains(&self, point: Vec2) -> bool {
         point.x >= self.pos.x
             && point.y >= self.pos.y
@@ -9,7 +9,7 @@ impl Rect {
             && point.y <= self.pos.y + self.size.y
     }
 
-    // check if this rect overlaps with another
+    /// check if this rect overlaps with another
     pub fn intersects(&self, other: &Rect) -> bool {
         self.pos.x < other.pos.x + other.size.x
             && self.pos.x + self.size.x > other.pos.x
@@ -18,14 +18,14 @@ impl Rect {
     }
 }
 
-// check if point is inside circle
+/// check if point is inside circle
 pub fn circle_contains(center: Vec2, radius: f32, point: Vec2) -> bool {
     let dx = point.x - center.x;
     let dy = point.y - center.y;
     dx * dx + dy * dy <= radius * radius
 }
 
-// check if circle overlaps rect
+/// check if circle overlaps rect
 pub fn circle_intersects_rect(center: Vec2, radius: f32, rect: &Rect) -> bool {
     // find closest point on rect to circle center
     let cx = center.x.clamp(rect.pos.x, rect.pos.x + rect.size.x);
@@ -35,7 +35,7 @@ pub fn circle_intersects_rect(center: Vec2, radius: f32, rect: &Rect) -> bool {
     dx * dx + dy * dy <= radius * radius
 }
 
-// ray casting algorithm for arbitrary polygon
+/// ray casting algorithm for arbitrary polygon
 pub fn point_in_polygon(point: Vec2, polygon: &[Vec2]) -> bool {
     let n = polygon.len();
     if n < 3 { return false; }
@@ -55,7 +55,7 @@ pub fn point_in_polygon(point: Vec2, polygon: &[Vec2]) -> bool {
     inside
 }
 
-// find intersection point of two line segments, if any
+/// find intersection point of two line segments, if any
 pub fn line_intersects_line(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2) -> Option<Vec2> {
     let d1x = a2.x - a1.x;
     let d1y = a2.y - a1.y;

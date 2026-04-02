@@ -4,7 +4,8 @@
       "Bash(cargo check:*)",
       "Bash(cargo build:*)",
       "Bash(cargo clippy:*)",
-      "Bash(wc -l /c/serverSync/lite-render-2d/examples/*.rs)"
+      "Bash(wc -l /c/serverSync/lite-render-2d/examples/*.rs)",
+      "Bash(cargo test:*)"
     ]
   }
 }

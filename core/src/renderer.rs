@@ -9,21 +9,29 @@ use crate::types::{
 };
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RendererError {
-    #[error("failed to create context: {0}")]
+    #[error("failed to create rendering context: {0} — hint: check that your GPU drivers are up to date")]
     ContextCreation(String),
 
-    #[error("surface error: {0}")]
+    #[error("display surface error: {0} — hint: this may happen after a window resize or minimize")]
     Surface(String),
 
-    #[error("shader compilation failed: {0}")]
+    #[error("shader compilation failed: {0} — hint: check GLSL/WGSL syntax if using a custom material")]
     Shader(String),
 
-    #[error("texture error: {0}")]
+    #[error("texture error: {0} — hint: ensure the image data is a valid PNG or other supported format")]
     Texture(String),
 
-    #[error("font error: {0}")]
+    #[error("font error: {0} — hint: ensure the file is a valid TTF or OTF font")]
     Font(String),
+
+    #[error("I/O error reading '{path}': {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("{0}")]
     Other(String),
@@ -127,6 +135,19 @@ pub trait Renderer {
         data: &[u8],
         params: TextureParams,
     ) -> Result<TextureHandle, RendererError>;
+
+    /// load a texture from a file path, reads + decodes internally
+    fn load_texture_from_file(
+        &mut self,
+        path: &std::path::Path,
+        params: TextureParams,
+    ) -> Result<TextureHandle, RendererError> {
+        let data = std::fs::read(path).map_err(|e| RendererError::Io {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        self.load_texture(&data, params)
+    }
 
     /// unload a previously loaded texture
     fn unload_texture(&mut self, handle: TextureHandle);

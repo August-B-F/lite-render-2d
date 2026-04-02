@@ -1,3 +1,31 @@
+//! # lite-render-2d
+//!
+//! lightweight 2d rendering in rust. 100k sprites, 16MB RAM, 2 draw calls.
+//!
+//! ## quick start
+//!
+//! ```rust,ignore
+//! use lite_render_2d_core::prelude::*;
+//! use lite_render_2d_glow::GlowRenderer;
+//!
+//! let mut ren = GlowRenderer::new(&window)?;
+//! ren.set_clear_color(Color::rgb(0.15, 0.15, 0.2));
+//!
+//! ren.begin_frame()?;
+//! ren.draw_rect(Rect::new(50.0, 50.0, 200.0, 100.0), DrawParams::fill(Color::RED));
+//! ren.draw_circle(Vec2::new(400.0, 300.0), 60.0, DrawParams::fill(Color::CYAN));
+//! let stats = ren.end_frame()?;
+//! ```
+//!
+//! ## coordinate system
+//!
+//! y-down: (0, 0) is top-left, x goes right, y goes down.
+//!
+//! ## backends
+//!
+//! - `lite-render-2d-glow` — OpenGL ES 3.0 (default, lightweight)
+//! - `lite-render-2d-wgpu` — wgpu (heavier, broader gpu support)
+
 pub mod atlas;
 #[cfg(feature = "audio")]
 pub mod audio;
@@ -13,6 +41,7 @@ pub mod input;
 pub mod path_tessellation;
 pub mod particle;
 pub mod post_process;
+pub mod prelude;
 pub mod renderer;
 #[cfg(feature = "text")]
 pub mod rich_text;
@@ -28,6 +57,9 @@ pub mod trail;
 pub mod transform_stack;
 pub mod texture;
 pub mod types;
+
+#[cfg(test)]
+mod tests;
 
 pub use atlas::{AtlasRegion, TextureAtlas};
 #[cfg(feature = "audio")]

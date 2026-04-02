@@ -1,3 +1,4 @@
+/// post-processing effects applied to render targets
 #[derive(Clone, Debug)]
 pub enum PostEffect {
     Grayscale,

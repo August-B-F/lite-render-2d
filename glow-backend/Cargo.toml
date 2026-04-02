@@ -18,6 +18,10 @@ raw-window-handle = { workspace = true }
 winit = { workspace = true }
 
 [[example]]
+name = "hello"
+path = "../examples/hello.rs"
+
+[[example]]
 name = "shapes"
 path = "../examples/shapes.rs"
 
@@ -50,5 +54,17 @@ name = "all_new_features"
 path = "../examples/all_new_features.rs"
 
 [[example]]
+name = "interactive"
+path = "../examples/interactive.rs"
+
+[[example]]
+name = "benchmark_simple"
+path = "../examples/benchmark_simple.rs"
+
+[[example]]
 name = "test_optimizations"
 path = "../examples/test_optimizations.rs"
+
+[[example]]
+name = "integration_tests"
+path = "../examples/integration_tests.rs"

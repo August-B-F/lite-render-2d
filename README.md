@@ -110,7 +110,4 @@ cargo run --example <name>
 - `test_optimizations` — frustum culling, instanced drawing, atlas regrow, double-buffered VBOs
 
 ## License
-
-Free for personal and non-commercial use. Commercial use requires written permission from the author.
-
-This software is provided as-is, with no warranty of any kind. The author assumes no responsibility or liability for any outcomes resulting from its use.
+MIT
