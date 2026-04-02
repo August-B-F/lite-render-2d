@@ -13,17 +13,12 @@ impl FontHandle {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum TextAlign {
+    #[default]
     Left,
     Center,
     Right,
-}
-
-impl Default for TextAlign {
-    fn default() -> Self {
-        Self::Left
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -33,4 +28,8 @@ pub struct TextParams {
     pub color: Color,
     pub align: TextAlign,
     pub position: Vec2,
+    // when set, wrap text at word boundries within this width
+    pub max_width: Option<f32>,
+    // override line height (defaults to font size if None)
+    pub line_height: Option<f32>,
 }

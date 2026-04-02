@@ -32,10 +32,10 @@ void main() {
 "#;
 
 pub const BATCH_SHAPE_FRAG: &str = r#"#version 300 es
-precision highp float;
+precision mediump float;
 
 in vec2 v_local;
-flat in vec4 v_color;
+flat in lowp vec4 v_color;
 flat in int v_mode;
 flat in float v_stroke_w;
 flat in vec2 v_size;
@@ -81,36 +81,249 @@ precision highp float;
 layout(location = 0) in vec2 a_pos;
 layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec4 a_tint;
-layout(location = 3) in float a_opacity;
 
 uniform mat4 u_proj;
 
 out vec2 v_uv;
 flat out vec4 v_tint;
-flat out float v_opacity;
 
 void main() {
     v_uv = a_uv;
     v_tint = a_tint;
-    v_opacity = a_opacity;
     gl_Position = u_proj * vec4(a_pos, 0.0, 1.0);
 }
 "#;
 
 pub const BATCH_SPRITE_FRAG: &str = r#"#version 300 es
+precision mediump float;
+
+in mediump vec2 v_uv;
+flat in lowp vec4 v_tint;
+
+uniform sampler2D u_tex;
+
+out lowp vec4 o_color;
+
+void main() {
+    vec4 tex = texture(u_tex, v_uv);
+    o_color = tex * v_tint;
+}
+"#;
+
+// -- instanced sprite shader: static unit quad + per-instance transform/uv/tint --
+
+pub const INSTANCED_SPRITE_VERT: &str = r#"#version 300 es
+precision highp float;
+
+// per-vertex (static quad)
+layout(location = 0) in vec2 a_corner;
+
+// per-instance (divisor 1)
+layout(location = 1) in vec2 a_pos;
+layout(location = 2) in vec2 a_scale;
+layout(location = 3) in float a_rot;
+layout(location = 4) in vec2 a_uv_min;
+layout(location = 5) in vec2 a_uv_max;
+layout(location = 6) in vec4 a_tint;
+
+uniform mat4 u_proj;
+
+out vec2 v_uv;
+flat out vec4 v_tint;
+
+void main() {
+    // trs: rotate then scale then translate
+    float c = cos(a_rot);
+    float s = sin(a_rot);
+    vec2 scaled = a_corner * a_scale;
+    vec2 rotated = vec2(c * scaled.x - s * scaled.y, s * scaled.x + c * scaled.y);
+    vec2 world = rotated + a_pos;
+    v_uv = mix(a_uv_min, a_uv_max, a_corner);
+    v_tint = a_tint;
+    gl_Position = u_proj * vec4(world, 0.0, 1.0);
+}
+"#;
+
+// reuses BATCH_SPRITE_FRAG for fragment shader
+
+// -- sdf text shader: same vertex layout as sprites, smoothstep on distance in alpha --
+
+pub const SDF_TEXT_VERT: &str = BATCH_SPRITE_VERT;
+
+pub const SDF_TEXT_FRAG: &str = r#"#version 300 es
 precision highp float;
 
 in vec2 v_uv;
 flat in vec4 v_tint;
-flat in float v_opacity;
 
 uniform sampler2D u_tex;
 
 out vec4 o_color;
 
 void main() {
+    float dist = texture(u_tex, v_uv).a;
+    float edge = 0.5;
+    float aa = fwidth(dist) * 0.75;
+    float alpha = smoothstep(edge - aa, edge + aa, dist);
+    if (alpha < 0.001) discard;
+    o_color = vec4(v_tint.rgb, v_tint.a * alpha);
+}
+"#;
+
+// -- post-processing effect shaders --
+
+pub const EFFECT_VERT: &str = r#"#version 300 es
+precision highp float;
+
+layout(location = 0) in vec2 a_pos;
+layout(location = 1) in vec2 a_uv;
+
+out vec2 v_uv;
+
+void main() {
+    v_uv = a_uv;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+"#;
+
+pub const EFFECT_GRAYSCALE_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+out vec4 o_color;
+
+void main() {
     vec4 tex = texture(u_tex, v_uv);
-    o_color = tex * v_tint * vec4(1.0, 1.0, 1.0, v_opacity);
+    float g = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+    o_color = vec4(g, g, g, tex.a);
+}
+"#;
+
+pub const EFFECT_INVERT_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+out vec4 o_color;
+
+void main() {
+    vec4 tex = texture(u_tex, v_uv);
+    o_color = vec4(1.0 - tex.rgb, tex.a);
+}
+"#;
+
+pub const EFFECT_BRIGHTNESS_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_brightness;
+out vec4 o_color;
+
+void main() {
+    vec4 tex = texture(u_tex, v_uv);
+    o_color = vec4(tex.rgb * u_brightness, tex.a);
+}
+"#;
+
+pub const EFFECT_VIGNETTE_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+out vec4 o_color;
+
+void main() {
+    vec4 tex = texture(u_tex, v_uv);
+    // distnace from center, darken edges
+    vec2 d = v_uv - vec2(0.5);
+    float vign = 1.0 - dot(d, d) * 2.0;
+    vign = clamp(vign, 0.0, 1.0);
+    o_color = vec4(tex.rgb * vign, tex.a);
+}
+"#;
+
+// -- blur shaders for gaussian blur (separable, horizontal + vertical) --
+
+pub const EFFECT_BLUR_H_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_radius;
+out vec4 o_color;
+
+void main() {
+    vec2 tex_size = vec2(textureSize(u_tex, 0));
+    float px = 1.0 / tex_size.x;
+    int r = int(u_radius);
+    float total_weight = 0.0;
+    vec4 sum = vec4(0.0);
+    for (int i = -r; i <= r; i++) {
+        float w = exp(-float(i * i) / (2.0 * u_radius * u_radius / 4.0 + 1.0));
+        sum += texture(u_tex, v_uv + vec2(float(i) * px, 0.0)) * w;
+        total_weight += w;
+    }
+    o_color = sum / total_weight;
+}
+"#;
+
+pub const EFFECT_BLUR_V_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_radius;
+out vec4 o_color;
+
+void main() {
+    vec2 tex_size = vec2(textureSize(u_tex, 0));
+    float px = 1.0 / tex_size.y;
+    int r = int(u_radius);
+    float total_weight = 0.0;
+    vec4 sum = vec4(0.0);
+    for (int i = -r; i <= r; i++) {
+        float w = exp(-float(i * i) / (2.0 * u_radius * u_radius / 4.0 + 1.0));
+        sum += texture(u_tex, v_uv + vec2(0.0, float(i) * px)) * w;
+        total_weight += w;
+    }
+    o_color = sum / total_weight;
+}
+"#;
+
+pub const EFFECT_BLOOM_THRESHOLD_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_threshold;
+out vec4 o_color;
+
+void main() {
+    vec4 tex = texture(u_tex, v_uv);
+    float brightness = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+    if (brightness > u_threshold) {
+        o_color = tex;
+    } else {
+        o_color = vec4(0.0);
+    }
+}
+"#;
+
+pub const EFFECT_BLOOM_COMPOSITE_FRAG: &str = r#"#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform sampler2D u_bloom;
+uniform float u_intensity;
+out vec4 o_color;
+
+void main() {
+    vec4 original = texture(u_tex, v_uv);
+    vec4 bloom = texture(u_bloom, v_uv);
+    o_color = original + bloom * u_intensity;
 }
 "#;
 

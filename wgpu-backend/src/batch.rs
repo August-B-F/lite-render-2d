@@ -26,6 +26,7 @@ pub(crate) struct DrawCmd {
 pub(crate) enum CmdKind {
     Shape,
     Sprite { texture_id: u64 },
+    SdfSprite { texture_id: u64 },
 }
 
 pub(crate) struct Batcher {
@@ -111,6 +112,26 @@ impl Batcher {
         self.sprite_buf.extend_from_slice(verts);
         self.commands.push(DrawCmd {
             kind: CmdKind::Sprite { texture_id },
+            vert_start: start,
+            vert_len: SPRITE_FLOATS_PER_QUAD as u32,
+            z_index,
+            blend,
+            clip,
+        });
+    }
+
+    pub fn push_sdf_sprite(
+        &mut self,
+        texture_id: u64,
+        verts: &[f32; SPRITE_FLOATS_PER_QUAD],
+        z_index: i32,
+        blend: BlendMode,
+        clip: Option<[u32; 4]>,
+    ) {
+        let start = self.sprite_buf.len() as u32;
+        self.sprite_buf.extend_from_slice(verts);
+        self.commands.push(DrawCmd {
+            kind: CmdKind::SdfSprite { texture_id },
             vert_start: start,
             vert_len: SPRITE_FLOATS_PER_QUAD as u32,
             z_index,

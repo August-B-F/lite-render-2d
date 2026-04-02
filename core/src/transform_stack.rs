@@ -36,6 +36,7 @@ fn from_transform2d(t: &Transform2D) -> Affine {
 pub struct TransformStack {
     stack: Vec<Affine>,
     current: Affine,
+    identity: bool, // cached flag, avoids 6-float compare per draw call
 }
 
 impl TransformStack {
@@ -43,6 +44,7 @@ impl TransformStack {
         Self {
             stack: Vec::new(),
             current: IDENTITY,
+            identity: true,
         }
     }
 
@@ -50,21 +52,24 @@ impl TransformStack {
         self.stack.push(self.current);
         let m = from_transform2d(&transform);
         self.current = multiply(&self.current, &m);
+        self.identity = false;
     }
 
     pub fn pop(&mut self) {
         if let Some(prev) = self.stack.pop() {
             self.current = prev;
+            self.identity = self.stack.is_empty() && self.current == IDENTITY;
         }
     }
 
     pub fn reset(&mut self) {
         self.stack.clear();
         self.current = IDENTITY;
+        self.identity = true;
     }
 
     pub fn is_identity(&self) -> bool {
-        self.current == IDENTITY
+        self.identity
     }
 
     pub fn apply(&self, p: Vec2) -> Vec2 {

@@ -11,9 +11,40 @@ use lite_render_2d_glow::GlowRenderer as Renderer2D;
 use lite_render_2d_wgpu::WgpuRenderer as Renderer2D;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
+
+struct CliArgs {
+    no_vsync: bool,
+    count: u32,
+}
+
+fn parse_args() -> CliArgs {
+    let args: Vec<String> = std::env::args().collect();
+    let mut no_vsync = false;
+    let mut count = 3000u32;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--no-vsync" => no_vsync = true,
+            "--count" => {
+                i += 1;
+                if i < args.len() {
+                    count = args[i].parse().unwrap_or(3000);
+                }
+            }
+            _ => {
+                // try --count=N form
+                if args[i].starts_with("--count=") {
+                    count = args[i][8..].parse().unwrap_or(3000);
+                }
+            }
+        }
+        i += 1;
+    }
+    CliArgs { no_vsync, count }
+}
 
 // 64x64 checkerboard
 fn make_checkerboard_png() -> Vec<u8> {
@@ -68,6 +99,8 @@ struct App {
     keys_held: HashSet<KeyCode>,
     frame_count: u32,
     last_print: Instant,
+    no_vsync: bool,
+    count: u32,
 }
 
 impl ApplicationHandler for App {
@@ -75,11 +108,16 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
+        let title = format!(
+            "mixed — {} objects{}",
+            self.count,
+            if self.no_vsync { " (vsync off)" } else { "" }
+        );
         let attrs = WindowAttributes::default()
-            .with_title("mixed — 3000 objects batched")
+            .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0));
         let win = event_loop.create_window(attrs).expect("create window");
-        let mut ren = Renderer2D::new(&win).expect("create renderer");
+        let mut ren = Renderer2D::new_with_vsync(&win, !self.no_vsync).expect("create renderer");
         ren.set_clear_color(Color::new(0.1, 0.1, 0.15, 1.0));
 
         let tex_a = ren.load_texture(&make_checkerboard_png(), TextureParams::default()).expect("load tex a");
@@ -145,9 +183,18 @@ impl ApplicationHandler for App {
 
                 let sw = 1024.0_f32;
                 let sh = 768.0_f32;
+                let n = self.count;
 
-                // -- 500 filled rects --
-                for i in 0..500 {
+                // distribute objects: rects 1/6, circles 1/6, stroked 1/12, lines 1/12, spriteA 1/3, spriteB 1/6
+                let n_rects = n / 6;
+                let n_circles = n / 6;
+                let n_stroked = n / 12;
+                let n_lines = n / 12;
+                let n_sprite_b = n / 6;
+                let n_sprite_a = n - n_rects - n_circles - n_stroked - n_lines - n_sprite_b;
+
+                // -- filled rects --
+                for i in 0..n_rects {
                     let fi = i as f32;
                     let x = (fi * 137.5) % sw;
                     let y = (fi * 97.3) % sh;
@@ -159,8 +206,8 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                // -- 500 filled circles --
-                for i in 0..500 {
+                // -- filled circles --
+                for i in 0..n_circles {
                     let fi = i as f32;
                     let x = (fi * 103.7) % sw;
                     let y = (fi * 89.1) % sh;
@@ -172,8 +219,8 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                // -- 250 stroked rects --
-                for i in 0..250 {
+                // -- stroked rects --
+                for i in 0..n_stroked {
                     let fi = i as f32;
                     let x = (fi * 151.3) % sw;
                     let y = (fi * 113.7) % sh;
@@ -183,8 +230,8 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                // -- 250 lines --
-                for i in 0..250 {
+                // -- lines --
+                for i in 0..n_lines {
                     let fi = i as f32;
                     let x0 = (fi * 127.1) % sw;
                     let y0 = (fi * 83.9) % sh;
@@ -198,8 +245,8 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                // -- 1000 sprites with texture A --
-                for i in 0..1000 {
+                // -- sprites with texture A --
+                for i in 0..n_sprite_a {
                     let fi = i as f32;
                     let x = (fi * 119.3) % sw;
                     let y = (fi * 79.7) % sh;
@@ -218,8 +265,8 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                // -- 500 sprites with texture B --
-                for i in 0..500 {
+                // -- sprites with texture B --
+                for i in 0..n_sprite_b {
                     let fi = i as f32;
                     let x = (fi * 143.1) % sw;
                     let y = (fi * 67.9) % sh;
@@ -236,7 +283,7 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                ren.end_frame().expect("end frame");
+                let stats = ren.end_frame().expect("end frame");
 
                 // fps + draw call reporting
                 self.frame_count += 1;
@@ -244,9 +291,9 @@ impl ApplicationHandler for App {
                     let elapsed = self.last_print.elapsed().as_secs_f64();
                     let fps = 60.0 / elapsed;
                     println!(
-                        "fps: {:.1}  draw calls: {}  objects: 3000",
-                        fps,
-                        ren.draw_calls(),
+                        "fps: {:.1}  frame_ms: {:.2}  draws: {}  verts: {}  tex_binds: {}  ram: {}KB  objects: {}",
+                        fps, stats.frame_time_ms, stats.draw_calls,
+                        stats.vertices, stats.texture_binds, stats.ram_bytes / 1024, self.count,
                     );
                     self.last_print = Instant::now();
                 }
@@ -258,10 +305,21 @@ impl ApplicationHandler for App {
             _ => {}
         }
     }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(win) = &self.window {
+            win.request_redraw();
+        }
+    }
 }
 
 fn main() {
+    let cli = parse_args();
     let event_loop = EventLoop::new().expect("event loop");
+    if cli.no_vsync {
+        event_loop.set_control_flow(ControlFlow::Poll);
+    }
+    println!("count: {}  vsync: {}", cli.count, !cli.no_vsync);
     let mut app = App {
         window: None,
         renderer: None,
@@ -271,6 +329,8 @@ fn main() {
         keys_held: HashSet::new(),
         frame_count: 0,
         last_print: Instant::now(),
+        no_vsync: cli.no_vsync,
+        count: cli.count,
     };
     app.camera.position = Vec2::new(512.0, 384.0);
     event_loop.run_app(&mut app).expect("run");

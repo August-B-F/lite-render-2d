@@ -8,8 +8,14 @@ thiserror = { workspace = true }
 winit = { workspace = true }
 lyon_tessellation = { workspace = true, optional = true }
 fontdue = { workspace = true, optional = true }
+gilrs = { workspace = true, optional = true }
+rodio = { workspace = true, optional = true }
+usvg = { workspace = true, optional = true }
 
 [features]
 default = ["paths", "text"]
 paths = ["dep:lyon_tessellation"]
 text = ["dep:fontdue"]
+input = ["dep:gilrs"]
+audio = ["dep:rodio"]
+svg = ["dep:usvg", "paths"]

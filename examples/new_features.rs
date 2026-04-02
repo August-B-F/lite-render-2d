@@ -123,28 +123,28 @@ impl ApplicationHandler for App {
 
                     // filled rounded rect
                     ren.draw_rounded_rect(
-                        RoundedRect {
-                            rect: Rect { pos: Vec2::new(30.0, 300.0), size: Vec2::new(180.0, 90.0) },
-                            radius: 15.0,
-                        },
+                        RoundedRect::new(
+                            Rect { pos: Vec2::new(30.0, 300.0), size: Vec2::new(180.0, 90.0) },
+                            15.0,
+                        ),
                         DrawParams::fill(Color::new(0.2, 0.7, 0.4, 1.0)),
                     );
 
                     // stroked rounded rect
                     ren.draw_rounded_rect(
-                        RoundedRect {
-                            rect: Rect { pos: Vec2::new(240.0, 300.0), size: Vec2::new(160.0, 90.0) },
-                            radius: 25.0,
-                        },
+                        RoundedRect::new(
+                            Rect { pos: Vec2::new(240.0, 300.0), size: Vec2::new(160.0, 90.0) },
+                            25.0,
+                        ),
                         DrawParams::stroke(Color::new(1.0, 0.3, 0.5, 1.0), 3.0),
                     );
 
                     // rounded rect with large radius (pill shape)
                     ren.draw_rounded_rect(
-                        RoundedRect {
-                            rect: Rect { pos: Vec2::new(430.0, 310.0), size: Vec2::new(200.0, 60.0) },
-                            radius: 30.0,
-                        },
+                        RoundedRect::new(
+                            Rect { pos: Vec2::new(430.0, 310.0), size: Vec2::new(200.0, 60.0) },
+                            30.0,
+                        ),
                         DrawParams::fill(Color::new(0.4, 0.4, 0.9, 1.0)),
                     );
 

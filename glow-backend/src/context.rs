@@ -15,6 +15,13 @@ pub type GlContext = glutin::context::PossiblyCurrentContext;
 pub fn create_gl_context(
     window: &Window,
 ) -> Result<(glow::Context, Surface, GlContext), RendererError> {
+    create_gl_context_with_vsync(window, true)
+}
+
+pub fn create_gl_context_with_vsync(
+    window: &Window,
+    vsync: bool,
+) -> Result<(glow::Context, Surface, GlContext), RendererError> {
     let raw_window = window
         .window_handle()
         .expect("window handle")
@@ -36,11 +43,11 @@ pub fn create_gl_context(
     let display = unsafe { glutin::display::Display::new(raw_display, pref) }
         .map_err(|e| RendererError::ContextCreation(e.to_string()))?;
 
-    // no depth/stencil for 2d stuf
+    // no depth buffer for 2d stuf, but request stencil for masking
     let template = ConfigTemplateBuilder::new()
         .with_alpha_size(8)
         .with_depth_size(0)
-        .with_stencil_size(0)
+        .with_stencil_size(8)
         .compatible_with_native_window(raw_window)
         .build();
 
@@ -74,8 +81,11 @@ pub fn create_gl_context(
         .make_current(&surface)
         .expect("make gl context current");
 
-    // vsync on, dont fail if it doesnt work
-    let _ = surface.set_swap_interval(&ctx, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
+    if vsync {
+        let _ = surface.set_swap_interval(&ctx, SwapInterval::Wait(NonZeroU32::new(1).unwrap()));
+    } else {
+        let _ = surface.set_swap_interval(&ctx, SwapInterval::DontWait);
+    }
 
     let gl = unsafe {
         glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s))

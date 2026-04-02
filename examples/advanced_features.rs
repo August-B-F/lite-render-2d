@@ -78,10 +78,10 @@ impl ApplicationHandler for App {
 
                 // gradient rounded rect
                 ren.draw_rounded_rect(
-                    lite_render_2d_core::RoundedRect {
-                        rect: Rect { pos: Vec2::new(430.0, 30.0), size: Vec2::new(180.0, 100.0) },
-                        radius: 20.0,
-                    },
+                    lite_render_2d_core::RoundedRect::new(
+                        Rect { pos: Vec2::new(430.0, 30.0), size: Vec2::new(180.0, 100.0) },
+                        20.0,
+                    ),
                     DrawParams {
                         style: DrawStyle::LinearGradient {
                             start: Vec2::new(430.0, 30.0),

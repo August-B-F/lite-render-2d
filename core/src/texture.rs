@@ -19,6 +19,19 @@ pub struct TextureParams {
     pub wrap: WrapMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RenderTargetHandle(pub(crate) u64);
+
+impl RenderTargetHandle {
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub fn id(&self) -> u64 {
+        self.0
+    }
+}
+
 impl Default for TextureParams {
     fn default() -> Self {
         Self {

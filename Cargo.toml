@@ -16,4 +16,7 @@ pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 lyon_tessellation = "1"
 fontdue = "0.9"
+gilrs = "0.11"
+rodio = "0.20"
+usvg = "0.45"
 lite-render-2d-core = { path = "core" }

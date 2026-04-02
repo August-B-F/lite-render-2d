@@ -32,7 +32,7 @@ pub struct FontSystem {
     atlas_data: Vec<u8>,
     atlas_width: u32,
     atlas_height: u32,
-    atlas_dirty: bool,
+    dirty_rect: Option<(u32, u32, u32, u32)>, // (x, y, w, h) bounding box of changed pixels
     glyph_cache: HashMap<GlyphKey, GlyphInfo>,
     // shelf packer state
     shelf_x: u32,
@@ -49,7 +49,7 @@ impl FontSystem {
             atlas_data: vec![0u8; size],
             atlas_width: ATLAS_SIZE,
             atlas_height: ATLAS_SIZE,
-            atlas_dirty: false,
+            dirty_rect: None,
             glyph_cache: HashMap::new(),
             shelf_x: 0,
             shelf_y: 0,
@@ -147,7 +147,94 @@ impl FontSystem {
 
         self.shelf_x = ax + gw + pad;
         self.shelf_row_height = self.shelf_row_height.max(gh);
-        self.atlas_dirty = true;
+        // expand dirty rect to include this glyph
+        self.dirty_rect = Some(match self.dirty_rect {
+            Some((rx, ry, rw, rh)) => {
+                let min_x = rx.min(ax);
+                let min_y = ry.min(ay);
+                let max_x = (rx + rw).max(ax + gw);
+                let max_y = (ry + rh).max(ay + gh);
+                (min_x, min_y, max_x - min_x, max_y - min_y)
+            }
+            None => (ax, ay, gw, gh),
+        });
+    }
+
+    // split text into lines respecting \n and optional word wrap
+    fn split_lines(&self, text: &str, params: &TextParams) -> Vec<String> {
+        let font_id = params.font.id();
+        let size_key = (params.size * 10.0) as u32;
+
+        let mut lines = Vec::new();
+        for raw_line in text.split('\n') {
+            let max_w = match params.max_width {
+                Some(w) if w > 0.0 => w,
+                _ => {
+                    lines.push(raw_line.to_string());
+                    continue;
+                }
+            };
+
+            // word wrap this line
+            let words: Vec<&str> = raw_line.split(' ').collect();
+            let mut current = String::new();
+            let mut cur_w = 0.0f32;
+            let space_advance = {
+                let key = GlyphKey { font_id, ch: ' ', size_key };
+                self.glyph_cache.get(&key).map(|i| i.advance).unwrap_or(params.size * 0.25)
+            };
+
+            for word in words.iter() {
+                let word_w = self.measure_str_width(word, font_id, size_key);
+
+                // if single word exceeds max_w, char-wrap it
+                if word_w > max_w && current.is_empty() {
+                    let mut char_line = String::new();
+                    let mut cw = 0.0f32;
+                    for ch in word.chars() {
+                        let key = GlyphKey { font_id, ch, size_key };
+                        let adv = self.glyph_cache.get(&key).map(|i| i.advance).unwrap_or(0.0);
+                        if cw + adv > max_w && !char_line.is_empty() {
+                            lines.push(char_line);
+                            char_line = String::new();
+                            cw = 0.0;
+                        }
+                        char_line.push(ch);
+                        cw += adv;
+                    }
+                    current = char_line;
+                    cur_w = cw;
+                    continue;
+                }
+
+                let needed = if current.is_empty() { word_w } else { space_advance + word_w };
+                if cur_w + needed > max_w && !current.is_empty() {
+                    lines.push(current);
+                    current = String::new();
+                    cur_w = 0.0;
+                }
+
+                if !current.is_empty() {
+                    current.push(' ');
+                    cur_w += space_advance;
+                }
+                current.push_str(word);
+                cur_w += word_w;
+            }
+            lines.push(current);
+        }
+        lines
+    }
+
+    fn measure_str_width(&self, s: &str, font_id: u64, size_key: u32) -> f32 {
+        let mut w = 0.0f32;
+        for ch in s.chars() {
+            let key = GlyphKey { font_id, ch, size_key };
+            if let Some(info) = self.glyph_cache.get(&key) {
+                w += info.advance;
+            }
+        }
+        w
     }
 
     pub fn layout_text(&mut self, text: &str, params: &TextParams) -> Vec<GlyphQuad> {
@@ -161,37 +248,46 @@ impl FontSystem {
             self.ensure_glyph(font_id, ch, params.size);
         }
 
-        // measure total width for alignment
-        let total_width = self.measure_width(text, params);
-
-        let x_offset = match params.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center => -total_width * 0.5,
-            TextAlign::Right => -total_width,
-        };
-
-        let mut cursor_x = params.position.x + x_offset;
-        let baseline_y = params.position.y;
-        let mut quads = Vec::with_capacity(text.len());
-
+        let line_h = params.line_height.unwrap_or(params.size);
+        let lines = self.split_lines(text, params);
         let size_key = (params.size * 10.0) as u32;
 
-        for ch in text.chars() {
-            let key = GlyphKey { font_id, ch, size_key };
-            if let Some(info) = self.glyph_cache.get(&key) {
-                if info.width > 0 && info.height > 0 {
-                    // fontdue ymin is distance from baseline (positive = above)
-                    let gx = cursor_x + info.offset.x;
-                    let gy = baseline_y - info.offset.y - info.height as f32;
+        let mut quads = Vec::with_capacity(text.len());
+        let align_width = params.max_width.unwrap_or(0.0);
 
-                    quads.push(GlyphQuad {
-                        pos: Vec2::new(gx, gy),
-                        size: Vec2::new(info.width as f32, info.height as f32),
-                        uv: info.uv,
-                        color: params.color,
-                    });
+        for (li, line) in lines.iter().enumerate() {
+            let line_w = self.measure_str_width(line, font_id, size_key);
+
+            let x_offset = match params.align {
+                TextAlign::Left => 0.0,
+                TextAlign::Center => {
+                    if align_width > 0.0 { (align_width - line_w) * 0.5 }
+                    else { -line_w * 0.5 }
                 }
-                cursor_x += info.advance;
+                TextAlign::Right => {
+                    if align_width > 0.0 { align_width - line_w }
+                    else { -line_w }
+                }
+            };
+
+            let mut cursor_x = params.position.x + x_offset;
+            let baseline_y = params.position.y + li as f32 * line_h;
+
+            for ch in line.chars() {
+                let key = GlyphKey { font_id, ch, size_key };
+                if let Some(info) = self.glyph_cache.get(&key) {
+                    if info.width > 0 && info.height > 0 {
+                        let gx = cursor_x + info.offset.x;
+                        let gy = baseline_y - info.offset.y - info.height as f32;
+                        quads.push(GlyphQuad {
+                            pos: Vec2::new(gx, gy),
+                            size: Vec2::new(info.width as f32, info.height as f32),
+                            uv: info.uv,
+                            color: params.color,
+                        });
+                    }
+                    cursor_x += info.advance;
+                }
             }
         }
 
@@ -208,20 +304,48 @@ impl FontSystem {
             self.ensure_glyph(font_id, ch, params.size);
         }
 
-        Vec2::new(self.measure_width(text, params), params.size)
+        let line_h = params.line_height.unwrap_or(params.size);
+        let lines = self.split_lines(text, params);
+        let size_key = (params.size * 10.0) as u32;
+
+        let mut max_w = 0.0f32;
+        for line in &lines {
+            let w = self.measure_str_width(line, font_id, size_key);
+            if w > max_w { max_w = w; }
+        }
+
+        Vec2::new(max_w, lines.len() as f32 * line_h)
     }
 
-    fn measure_width(&self, text: &str, params: &TextParams) -> f32 {
-        let font_id = params.font.id();
-        let size_key = (params.size * 10.0) as u32;
-        let mut width = 0.0f32;
-        for ch in text.chars() {
-            let key = GlyphKey { font_id, ch, size_key };
-            if let Some(info) = self.glyph_cache.get(&key) {
-                width += info.advance;
-            }
+
+    // public wrapper for ensure_glyph, used by rich text
+    pub fn ensure_glyph_pub(&mut self, font_id: u64, ch: char, size: f32) {
+        self.ensure_glyph(font_id, ch, size);
+    }
+
+    // get horizontal advance for a glyph
+    pub fn glyph_advance(&self, font_id: u64, ch: char, size: f32) -> f32 {
+        let size_key = (size * 10.0) as u32;
+        let key = GlyphKey { font_id, ch, size_key };
+        self.glyph_cache.get(&key).map(|i| i.advance).unwrap_or(0.0)
+    }
+
+    // get a positioned glyph quad (used by rich text layout)
+    pub fn glyph_quad(&self, font_id: u64, ch: char, size: f32, cx: f32, by: f32, color: Color) -> Option<GlyphQuad> {
+        let size_key = (size * 10.0) as u32;
+        let key = GlyphKey { font_id, ch, size_key };
+        let info = self.glyph_cache.get(&key)?;
+        if info.width == 0 || info.height == 0 {
+            return None;
         }
-        width
+        let gx = cx + info.offset.x;
+        let gy = by - info.offset.y - info.height as f32;
+        Some(GlyphQuad {
+            pos: Vec2::new(gx, gy),
+            size: Vec2::new(info.width as f32, info.height as f32),
+            uv: info.uv,
+            color,
+        })
     }
 
     pub fn atlas_texture_data(&self) -> (&[u8], u32, u32) {
@@ -229,10 +353,24 @@ impl FontSystem {
     }
 
     pub fn is_atlas_dirty(&self) -> bool {
-        self.atlas_dirty
+        self.dirty_rect.is_some()
+    }
+
+    pub fn dirty_region(&self) -> Option<(u32, u32, u32, u32)> {
+        self.dirty_rect
+    }
+
+    // extract tightly-packed sub-rect from atlas (for glTexSubImage2D)
+    pub fn atlas_sub_data(&self, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for row in 0..h {
+            let src = (((y + row) * self.atlas_width + x) * 4) as usize;
+            out.extend_from_slice(&self.atlas_data[src..src + (w * 4) as usize]);
+        }
+        out
     }
 
     pub fn clear_dirty(&mut self) {
-        self.atlas_dirty = false;
+        self.dirty_rect = None;
     }
 }

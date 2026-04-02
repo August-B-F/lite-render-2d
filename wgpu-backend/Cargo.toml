@@ -35,3 +35,15 @@ path = "../examples/new_features.rs"
 [[example]]
 name = "advanced_features"
 path = "../examples/advanced_features.rs"
+
+[[example]]
+name = "feature_showcase"
+path = "../examples/feature_showcase.rs"
+
+[[example]]
+name = "next_features"
+path = "../examples/next_features.rs"
+
+[[example]]
+name = "all_new_features"
+path = "../examples/all_new_features.rs"
