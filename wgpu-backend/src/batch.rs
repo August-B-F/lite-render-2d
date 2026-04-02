@@ -87,7 +87,7 @@ impl Batcher {
         blend: BlendMode,
         clip: Option<[u32; 4]>,
     ) {
-        debug_assert!(verts.len() % SHAPE_FLOATS_PER_VERT == 0);
+        debug_assert!(verts.len().is_multiple_of(SHAPE_FLOATS_PER_VERT));
         let start = self.shape_buf.len() as u32;
         self.shape_buf.extend_from_slice(verts);
         self.commands.push(DrawCmd {

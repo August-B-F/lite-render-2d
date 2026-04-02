@@ -37,6 +37,12 @@ pub struct SdfFontSystem {
     next_font_id: u64,
 }
 
+impl Default for SdfFontSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SdfFontSystem {
     pub fn new() -> Self {
         let sz = (SDF_ATLAS_SIZE * SDF_ATLAS_SIZE * 4) as usize;

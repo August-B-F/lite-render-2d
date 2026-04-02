@@ -4,7 +4,7 @@ use crate::types::{Color, DrawStyle, GradientStop, LineCap, LineJoin, LineParams
 
 const FLOATS_PER_VERT: usize = 12;
 
-/// Apply current transform stack to shape vertex positions (every 12 floats, first 2 are x,y)
+// apply transform stack to shape verts (every 12 floats, first 2 are x,y)
 pub fn apply_transform(verts: &mut [f32], stack: &TransformStack) {
     if stack.is_identity() {
         return;
@@ -267,6 +267,7 @@ fn polyline_inner(
     let join_start = if closed { 0 } else { 1 };
     let join_end = if closed { n } else { n - 1 };
 
+    #[allow(clippy::needless_range_loop)]
     for i in join_start..join_end {
         let seg_prev = if closed { (i + seg_count - 1) % seg_count } else { i - 1 };
         let seg_next = if closed { i % seg_count } else { i };

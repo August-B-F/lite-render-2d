@@ -183,7 +183,7 @@ impl Batcher {
         blend: BlendMode,
         clip: Option<[u32; 4]>,
     ) {
-        debug_assert!(verts.len() % SHAPE_BYTES_PER_VERT == 0);
+        debug_assert!(verts.len().is_multiple_of(SHAPE_BYTES_PER_VERT));
         let start = self.shape_buf.len() as u32;
         self.shape_buf.extend_from_slice(verts);
         self.commands.push(DrawCmd {
@@ -271,7 +271,7 @@ impl Batcher {
 
         if !already_sorted {
             // sort by z first, then by kind/texture, then blend for max coalescing
-            self.commands.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
+            self.commands.sort_by_key(|a| sort_key(a));
 
             // reorder vertex data so sorted cmds have contiguous verts
             self.shape_scratch.clear();
@@ -324,7 +324,7 @@ impl Batcher {
         // set initial gl state + upload proj matrix to all programs once
         unsafe {
             ctx.gl.enable(glow::BLEND);
-            apply_blend(&ctx.gl, cur_blend);
+            apply_blend(ctx.gl, cur_blend);
             ctx.gl.disable(glow::SCISSOR_TEST);
             // set projection on all programs upfront (doesnt change during flush)
             ctx.gl.use_program(Some(ctx.shape_prog));
@@ -380,7 +380,7 @@ impl Batcher {
             // switch blend if needed
             if cmd.blend != cur_blend {
                 cur_blend = cmd.blend;
-                apply_blend(&ctx.gl, cur_blend);
+                apply_blend(ctx.gl, cur_blend);
             }
 
             // switch scissor if needed

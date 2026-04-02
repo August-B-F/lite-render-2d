@@ -41,6 +41,12 @@ pub struct FontSystem {
     next_font_id: u64,
 }
 
+impl Default for FontSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FontSystem {
     pub fn new() -> Self {
         let size = (ATLAS_SIZE * ATLAS_SIZE * 4) as usize;

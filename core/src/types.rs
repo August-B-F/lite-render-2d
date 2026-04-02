@@ -173,43 +173,28 @@ impl RoundedRect {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum StrokeStyle {
+    #[default]
     Solid,
     Dashed { dash_len: f32, gap_len: f32 },
     Dotted { spacing: f32 },
 }
 
-impl Default for StrokeStyle {
-    fn default() -> Self {
-        Self::Solid
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum LineCap {
+    #[default]
     Butt,
     Round,
     Square,
 }
 
-impl Default for LineCap {
-    fn default() -> Self {
-        Self::Butt
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum LineJoin {
+    #[default]
     Miter,
     Round,
     Bevel,
-}
-
-impl Default for LineJoin {
-    fn default() -> Self {
-        Self::Miter
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -250,20 +235,15 @@ pub enum DrawStyle {
     RadialGradientStops { center: Vec2, radius: f32, stops: Vec<GradientStop> },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum BlendMode {
+    #[default]
     Alpha,
     Additive,
     Multiply,
     Screen,
     PremultipliedAlpha,
-}
-
-impl Default for BlendMode {
-    fn default() -> Self {
-        Self::Alpha
-    }
 }
 
 #[derive(Clone, Debug)]

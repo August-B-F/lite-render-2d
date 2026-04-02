@@ -275,7 +275,7 @@ impl WgpuRenderer {
         }
     }
 
-    fn push_shape_raw_transformed(&mut self, verts: &mut Vec<f32>, z_index: i32, blend: BlendMode) {
+    fn push_shape_raw_transformed(&mut self, verts: &mut [f32], z_index: i32, blend: BlendMode) {
         lite_render_2d_core::tessellation::apply_transform(verts, &self.transform_stack);
         self.batcher.push_shape_raw(verts, z_index, blend, self.current_clip);
     }
@@ -483,7 +483,7 @@ impl Renderer for WgpuRenderer {
                 vertex: wgpu::VertexState {
                     module: &shape_shader,
                     entry_point: Some("vs_main"),
-                    buffers: &[shape_vertex_layout.clone()],
+                    buffers: std::slice::from_ref(&shape_vertex_layout),
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -572,7 +572,7 @@ impl Renderer for WgpuRenderer {
                 vertex: wgpu::VertexState {
                     module: &sprite_shader,
                     entry_point: Some("vs_main"),
-                    buffers: &[sprite_vertex_layout.clone()],
+                    buffers: std::slice::from_ref(&sprite_vertex_layout),
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -609,7 +609,7 @@ impl Renderer for WgpuRenderer {
                 vertex: wgpu::VertexState {
                     module: &sdf_shader,
                     entry_point: Some("vs_main"),
-                    buffers: &[sprite_vertex_layout.clone()],
+                    buffers: std::slice::from_ref(&sprite_vertex_layout),
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -1388,7 +1388,7 @@ impl Renderer for WgpuRenderer {
     }
 
     fn load_font(&mut self, data: &[u8]) -> Result<FontHandle, RendererError> {
-        self.font_system.load_font(data).map_err(|e| RendererError::Font(e))
+        self.font_system.load_font(data).map_err(RendererError::Font)
     }
 
     fn unload_font(&mut self, handle: FontHandle) {
@@ -1550,7 +1550,7 @@ impl Renderer for WgpuRenderer {
         let tex_id = self.next_tex_id;
         self.next_tex_id += 1;
         self.textures.insert(tex_id, TextureInfo {
-            bind_group: bind_group,
+            bind_group,
             width,
             height,
         });
@@ -1592,12 +1592,10 @@ impl Renderer for WgpuRenderer {
             return Err(RendererError::Other("invalid render target".into()));
         }
 
-        // flush pending draws to current target
-        if self.active_render_target.is_some() {
-            // flush to the current RT view
-            let view_id = self.active_render_target.unwrap();
+        // flush pending draws to curent target
+        if let Some(view_id) = self.active_render_target {
             if self.render_targets.contains_key(&view_id) {
-                // flush would go here but begin is typically called after begin_frame
+                // flush woud go here but begin is typicaly called after begin_frame
             }
         }
         // for simplicity, flush to a temporary - we handle this by just clearing the batcher
@@ -1778,7 +1776,7 @@ impl Renderer for WgpuRenderer {
     // -- sdf text --
 
     fn load_sdf_font(&mut self, data: &[u8]) -> Result<FontHandle, RendererError> {
-        self.sdf_font_system.load_font(data).map_err(|e| RendererError::Font(e))
+        self.sdf_font_system.load_font(data).map_err(RendererError::Font)
     }
 
     fn unload_sdf_font(&mut self, handle: FontHandle) {

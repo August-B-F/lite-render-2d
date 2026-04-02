@@ -185,7 +185,24 @@ impl GlowRenderer {
         }
         self.atlas_dirty = false;
 
-        if self.sprite_atlas_gl_tex.is_none() {
+        if let Some(tex) = self.sprite_atlas_gl_tex {
+            // atlas already exists, check for partial update
+            if let Some((dx, dy, dw, dh)) = self.sprite_atlas.dirty_region() {
+                // partial upload: only the changed region
+                let sub = self.sprite_atlas.atlas_sub_data(dx, dy, dw, dh);
+                unsafe {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                    self.gl.tex_sub_image_2d(
+                        glow::TEXTURE_2D, 0,
+                        dx as i32, dy as i32, dw as i32, dh as i32,
+                        glow::RGBA, glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&sub)),
+                    );
+                    self.gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+                self.sprite_atlas.clear_dirty();
+            }
+        } else {
             // first time: create gl texture with full atlas data
             let (data, aw, ah) = self.sprite_atlas.texture_data();
             let tex = unsafe {
@@ -213,21 +230,6 @@ impl GlowRenderer {
             self.textures.insert(atlas_tex_id, TextureInfo { gl_tex: tex, width: aw, height: ah });
             self.sprite_atlas_tex_id = Some(atlas_tex_id);
             self.sprite_atlas.clear_dirty();
-        } else if let Some((dx, dy, dw, dh)) = self.sprite_atlas.dirty_region() {
-            // partial upload: only the changed region
-            let sub = self.sprite_atlas.atlas_sub_data(dx, dy, dw, dh);
-            let tex = self.sprite_atlas_gl_tex.unwrap();
-            unsafe {
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-                self.gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D, 0,
-                    dx as i32, dy as i32, dw as i32, dh as i32,
-                    glow::RGBA, glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&sub)),
-                );
-                self.gl.bind_texture(glow::TEXTURE_2D, None);
-            }
-            self.sprite_atlas.clear_dirty();
         }
 
         // update all atlas-packed textures to point to the atlas gl tex
@@ -236,7 +238,7 @@ impl GlowRenderer {
             None => return,
         };
         let atlas_tex_id = self.sprite_atlas_tex_id.unwrap();
-        for (&id, _region) in &self.atlas_region_map {
+        for &id in self.atlas_region_map.keys() {
             if let Some(info) = self.textures.get_mut(&id) {
                 info.gl_tex = gl_tex;
             }
@@ -374,6 +376,7 @@ impl GlowRenderer {
     }
 
     // bloom: threshold -> blur -> additive composite
+    #[allow(clippy::too_many_arguments)]
     fn apply_bloom(&self, src_tex: glow::Texture, dst_fbo: glow::Framebuffer, w: u32, h: u32,
                    threshold: f32, intensity: f32, radius: u32) {
         let (thresh_fbo, thresh_tex) = self.create_temp_fbo(w, h);
@@ -464,7 +467,7 @@ impl GlowRenderer {
         }
     }
 
-    fn push_shape_raw_transformed(&mut self, verts: &mut Vec<f32>, z_index: i32, blend: BlendMode) {
+    fn push_shape_raw_transformed(&mut self, verts: &mut [f32], z_index: i32, blend: BlendMode) {
         lite_render_2d_core::tessellation::apply_transform(verts, &self.transform_stack);
         // convert f32 tessellation output (12 floats/vert) to packed bytes (36 bytes/vert)
         let bytes = Self::f32_verts_to_shape_bytes(verts);
@@ -1478,7 +1481,7 @@ impl Renderer for GlowRenderer {
         }
 
         let gl_tex = unsafe {
-            let tex = self.gl.create_texture().map_err(|e| RendererError::Texture(e))?;
+            let tex = self.gl.create_texture().map_err(RendererError::Texture)?;
             self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             self.gl.tex_image_2d(
                 glow::TEXTURE_2D,
@@ -1647,7 +1650,7 @@ impl Renderer for GlowRenderer {
     }
 
     fn load_font(&mut self, data: &[u8]) -> Result<FontHandle, RendererError> {
-        self.font_system.load_font(data).map_err(|e| RendererError::Font(e))
+        self.font_system.load_font(data).map_err(RendererError::Font)
     }
 
     fn unload_font(&mut self, handle: FontHandle) {
@@ -1661,7 +1664,23 @@ impl Renderer for GlowRenderer {
         }
 
         // ensure atlas texture is uploaded
-        if self.font_atlas_gl_tex.is_none() {
+        if let Some(gl_tex) = self.font_atlas_gl_tex {
+            if let Some((dx, dy, dw, dh)) = self.font_system.dirty_region() {
+                // partial upload: only the changed region
+                let sub = self.font_system.atlas_sub_data(dx, dy, dw, dh);
+                unsafe {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+                    self.gl.tex_sub_image_2d(
+                        glow::TEXTURE_2D, 0,
+                        dx as i32, dy as i32, dw as i32, dh as i32,
+                        glow::RGBA, glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&sub)),
+                    );
+                    self.gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+                self.font_system.clear_dirty();
+            }
+        } else {
             // first time: create gl texture with full atlas data
             let (data, w, h) = self.font_system.atlas_texture_data();
             let gl_tex = unsafe {
@@ -1687,21 +1706,6 @@ impl Renderer for GlowRenderer {
             self.font_atlas_tex_id = Some(id);
             self.tex_map_dirty = true;
             self.gpu_ram_bytes += (w as u64) * (h as u64) * 4;
-            self.font_system.clear_dirty();
-        } else if let Some((dx, dy, dw, dh)) = self.font_system.dirty_region() {
-            // partial upload: only the changed region
-            let sub = self.font_system.atlas_sub_data(dx, dy, dw, dh);
-            let gl_tex = self.font_atlas_gl_tex.unwrap();
-            unsafe {
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
-                self.gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D, 0,
-                    dx as i32, dy as i32, dw as i32, dh as i32,
-                    glow::RGBA, glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&sub)),
-                );
-                self.gl.bind_texture(glow::TEXTURE_2D, None);
-            }
             self.font_system.clear_dirty();
         }
 
@@ -1775,7 +1779,7 @@ impl Renderer for GlowRenderer {
 
     fn create_render_target(&mut self, width: u32, height: u32) -> Result<RenderTargetHandle, RendererError> {
         unsafe {
-            let color_tex = self.gl.create_texture().map_err(|e| RendererError::Texture(e))?;
+            let color_tex = self.gl.create_texture().map_err(RendererError::Texture)?;
             self.gl.bind_texture(glow::TEXTURE_2D, Some(color_tex));
             let empty = vec![0u8; (width * height * 4) as usize];
             self.gl.tex_image_2d(
@@ -1794,7 +1798,7 @@ impl Renderer for GlowRenderer {
             self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
             self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
 
-            let fbo = self.gl.create_framebuffer().map_err(|e| RendererError::Other(e))?;
+            let fbo = self.gl.create_framebuffer().map_err(RendererError::Other)?;
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
             self.gl.framebuffer_texture_2d(
                 glow::FRAMEBUFFER,
@@ -2260,7 +2264,7 @@ impl Renderer for GlowRenderer {
     // -- sdf text --
 
     fn load_sdf_font(&mut self, data: &[u8]) -> Result<FontHandle, RendererError> {
-        self.sdf_font_system.load_font(data).map_err(|e| RendererError::Font(e))
+        self.sdf_font_system.load_font(data).map_err(RendererError::Font)
     }
 
     fn unload_sdf_font(&mut self, handle: FontHandle) {
@@ -2274,7 +2278,23 @@ impl Renderer for GlowRenderer {
         }
 
         // upload sdf atlas if dirty
-        if self.sdf_atlas_gl_tex.is_none() {
+        if let Some(gl_tex) = self.sdf_atlas_gl_tex {
+            if let Some((dx, dy, dw, dh)) = self.sdf_font_system.dirty_region() {
+                // partial upload: only the changed region
+                let sub = self.sdf_font_system.atlas_sub_data(dx, dy, dw, dh);
+                unsafe {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+                    self.gl.tex_sub_image_2d(
+                        glow::TEXTURE_2D, 0,
+                        dx as i32, dy as i32, dw as i32, dh as i32,
+                        glow::RGBA, glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&sub)),
+                    );
+                    self.gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+                self.sdf_font_system.clear_dirty();
+            }
+        } else {
             // first time: create gl texture with full atlas
             let (data, w, h) = self.sdf_font_system.atlas_texture_data();
             let gl_tex = unsafe {
@@ -2300,21 +2320,6 @@ impl Renderer for GlowRenderer {
             self.sdf_atlas_tex_id = Some(id);
             self.tex_map_dirty = true;
             self.gpu_ram_bytes += (w as u64) * (h as u64) * 4;
-            self.sdf_font_system.clear_dirty();
-        } else if let Some((dx, dy, dw, dh)) = self.sdf_font_system.dirty_region() {
-            // partial upload: only the changed region
-            let sub = self.sdf_font_system.atlas_sub_data(dx, dy, dw, dh);
-            let gl_tex = self.sdf_atlas_gl_tex.unwrap();
-            unsafe {
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
-                self.gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D, 0,
-                    dx as i32, dy as i32, dw as i32, dh as i32,
-                    glow::RGBA, glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&sub)),
-                );
-                self.gl.bind_texture(glow::TEXTURE_2D, None);
-            }
             self.sdf_font_system.clear_dirty();
         }
 
@@ -2352,7 +2357,22 @@ impl Renderer for GlowRenderer {
         }
 
         // ensure font atlas is uploaded (same as draw_text)
-        if self.font_atlas_gl_tex.is_none() {
+        if let Some(gl_tex) = self.font_atlas_gl_tex {
+            if let Some((dx, dy, dw, dh)) = self.font_system.dirty_region() {
+                let sub = self.font_system.atlas_sub_data(dx, dy, dw, dh);
+                unsafe {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
+                    self.gl.tex_sub_image_2d(
+                        glow::TEXTURE_2D, 0,
+                        dx as i32, dy as i32, dw as i32, dh as i32,
+                        glow::RGBA, glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&sub)),
+                    );
+                    self.gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+                self.font_system.clear_dirty();
+            }
+        } else {
             let (data, w, h) = self.font_system.atlas_texture_data();
             let gl_tex = unsafe {
                 let tex = self.gl.create_texture().expect("create font atlas tex");
@@ -2377,20 +2397,6 @@ impl Renderer for GlowRenderer {
             self.font_atlas_tex_id = Some(id);
             self.tex_map_dirty = true;
             self.gpu_ram_bytes += (w as u64) * (h as u64) * 4;
-            self.font_system.clear_dirty();
-        } else if let Some((dx, dy, dw, dh)) = self.font_system.dirty_region() {
-            let sub = self.font_system.atlas_sub_data(dx, dy, dw, dh);
-            let gl_tex = self.font_atlas_gl_tex.unwrap();
-            unsafe {
-                self.gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));
-                self.gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D, 0,
-                    dx as i32, dy as i32, dw as i32, dh as i32,
-                    glow::RGBA, glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&sub)),
-                );
-                self.gl.bind_texture(glow::TEXTURE_2D, None);
-            }
             self.font_system.clear_dirty();
         }
 

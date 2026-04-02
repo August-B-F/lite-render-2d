@@ -1,10 +1,9 @@
 use crate::types::{Transform2D, Vec2};
 
-/// 2D affine transform as [a, b, c, d, tx, ty]
-/// Represents the matrix:
-///   | a  c  tx |
-///   | b  d  ty |
-///   | 0  0   1 |
+// 2d affine as [a, b, c, d, tx, ty]
+//   | a  c  tx |
+//   | b  d  ty |
+//   | 0  0   1 |
 type Affine = [f32; 6];
 
 const IDENTITY: Affine = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -37,6 +36,12 @@ pub struct TransformStack {
     stack: Vec<Affine>,
     current: Affine,
     identity: bool, // cached flag, avoids 6-float compare per draw call
+}
+
+impl Default for TransformStack {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TransformStack {
