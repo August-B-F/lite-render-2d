@@ -16,15 +16,16 @@ impl Camera2D {
         }
     }
 
-    // ortho proj, ignroe z
+    /// Orthographic projection matrix (y-down, matching screen coordinates).
     pub fn projection_matrix(&self) -> [f32; 16] {
         let hw = self.viewport.x / (2.0 * self.zoom);
         let hh = self.viewport.y / (2.0 * self.zoom);
 
         let left = self.position.x - hw;
         let right = self.position.x + hw;
-        let bottom = self.position.y - hh;
-        let top = self.position.y + hh;
+        // y-down: top < bottom so the y-axis points downward
+        let top = self.position.y - hh;
+        let bottom = self.position.y + hh;
 
         let tx = -(right + left) / (right - left);
         let ty = -(top + bottom) / (top - bottom);
@@ -37,7 +38,7 @@ impl Camera2D {
         ]
     }
 
-    // screen px -> world coords
+    /// Screen pixels -> world coordinates (y-down).
     pub fn screen_to_world(&self, screen_pos: Vec2) -> Vec2 {
         let hw = self.viewport.x / (2.0 * self.zoom);
         let hh = self.viewport.y / (2.0 * self.zoom);
@@ -48,7 +49,7 @@ impl Camera2D {
         )
     }
 
-    // world coords -> screen px
+    /// World coordinates -> screen pixels (y-down).
     pub fn world_to_screen(&self, world_pos: Vec2) -> Vec2 {
         let hw = self.viewport.x / (2.0 * self.zoom);
         let hh = self.viewport.y / (2.0 * self.zoom);

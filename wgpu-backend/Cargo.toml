@@ -1,20 +1,19 @@
 [package]
-name = "lite-render-2d-glow"
+name = "lite-render-2d-wgpu"
 version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["use-glow"]
-use-glow = []
-use-wgpu = []  # unused here, silences cfg warning from shared examples
+default = ["use-wgpu"]
+use-wgpu = []
+use-glow = []  # unused here, silences cfg warning from shared examples
 
 [dependencies]
 lite-render-2d-core = { workspace = true }
-glow = { workspace = true }
-glutin = { workspace = true }
-glutin-winit = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
 image = { workspace = true }
-raw-window-handle = { workspace = true }
 winit = { workspace = true }
 
 [[example]]

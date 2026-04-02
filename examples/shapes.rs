@@ -1,5 +1,8 @@
 use lite_render_2d_core::{Color, DrawParams, LineParams, Rect, Renderer, Vec2};
-use lite_render_2d_glow::GlowRenderer;
+#[cfg(feature = "use-glow")]
+use lite_render_2d_glow::GlowRenderer as Renderer2D;
+#[cfg(feature = "use-wgpu")]
+use lite_render_2d_wgpu::WgpuRenderer as Renderer2D;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -7,7 +10,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 struct App {
     window: Option<Window>,
-    renderer: Option<GlowRenderer>,
+    renderer: Option<Renderer2D>,
 }
 
 impl ApplicationHandler for App {
@@ -17,7 +20,7 @@ impl ApplicationHandler for App {
         }
         let attrs = WindowAttributes::default().with_title("shapes");
         let win = event_loop.create_window(attrs).expect("create window");
-        let mut ren = GlowRenderer::new(&win).expect("create renderer");
+        let mut ren = Renderer2D::new(&win).expect("create renderer");
         // cornflower blue
         ren.set_clear_color(Color::new(0.392, 0.584, 0.929, 1.0));
         self.renderer = Some(ren);

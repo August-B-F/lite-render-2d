@@ -1,13 +1,18 @@
+use std::collections::HashSet;
 use std::time::Instant;
 
 use lite_render_2d_core::{
-    Color, DrawParams, LineParams, Rect, Renderer, SpriteParams, TextureHandle, TextureParams,
-    Transform2D, Vec2,
+    Camera2D, Color, DrawParams, LineParams, Rect, Renderer, SpriteParams, TextureHandle,
+    TextureParams, Transform2D, Vec2,
 };
-use lite_render_2d_glow::GlowRenderer;
+#[cfg(feature = "use-glow")]
+use lite_render_2d_glow::GlowRenderer as Renderer2D;
+#[cfg(feature = "use-wgpu")]
+use lite_render_2d_wgpu::WgpuRenderer as Renderer2D;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 // 64x64 checkerboard
@@ -56,9 +61,11 @@ fn make_gradient_png() -> Vec<u8> {
 
 struct App {
     window: Option<Window>,
-    renderer: Option<GlowRenderer>,
+    renderer: Option<Renderer2D>,
     tex_a: Option<TextureHandle>,
     tex_b: Option<TextureHandle>,
+    camera: Camera2D,
+    keys_held: HashSet<KeyCode>,
     frame_count: u32,
     last_print: Instant,
 }
@@ -72,7 +79,7 @@ impl ApplicationHandler for App {
             .with_title("mixed — 3000 objects batched")
             .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0));
         let win = event_loop.create_window(attrs).expect("create window");
-        let mut ren = GlowRenderer::new(&win).expect("create renderer");
+        let mut ren = Renderer2D::new(&win).expect("create renderer");
         ren.set_clear_color(Color::new(0.1, 0.1, 0.15, 1.0));
 
         let tex_a = ren.load_texture(&make_checkerboard_png(), TextureParams::default()).expect("load tex a");
@@ -91,6 +98,24 @@ impl ApplicationHandler for App {
                 if let Some(ren) = &mut self.renderer {
                     ren.resize(size.width, size.height);
                 }
+                self.camera.viewport = Vec2::new(size.width as f32, size.height as f32);
+                self.camera.position = Vec2::new(size.width as f32 / 2.0, size.height as f32 / 2.0);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    match event.state {
+                        ElementState::Pressed => { self.keys_held.insert(code); }
+                        ElementState::Released => { self.keys_held.remove(&code); }
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scroll_y = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 40.0,
+                };
+                let factor = if scroll_y > 0.0 { 1.1 } else { 1.0 / 1.1 };
+                self.camera.zoom = (self.camera.zoom * factor).clamp(0.1, 10.0);
             }
             WindowEvent::RedrawRequested => {
                 let (Some(ren), Some(tex_a), Some(tex_b)) =
@@ -100,6 +125,23 @@ impl ApplicationHandler for App {
                 };
 
                 ren.begin_frame().expect("begin frame");
+
+                // pan camera with arrow keys
+                let pan_speed = 5.0 / self.camera.zoom;
+                if self.keys_held.contains(&KeyCode::ArrowLeft) {
+                    self.camera.position.x -= pan_speed;
+                }
+                if self.keys_held.contains(&KeyCode::ArrowRight) {
+                    self.camera.position.x += pan_speed;
+                }
+                if self.keys_held.contains(&KeyCode::ArrowUp) {
+                    self.camera.position.y -= pan_speed;
+                }
+                if self.keys_held.contains(&KeyCode::ArrowDown) {
+                    self.camera.position.y += pan_speed;
+                }
+
+                ren.set_camera(&self.camera);
 
                 let sw = 1024.0_f32;
                 let sh = 768.0_f32;
@@ -225,8 +267,11 @@ fn main() {
         renderer: None,
         tex_a: None,
         tex_b: None,
+        camera: Camera2D::new(1024.0, 768.0),
+        keys_held: HashSet::new(),
         frame_count: 0,
         last_print: Instant::now(),
     };
+    app.camera.position = Vec2::new(512.0, 384.0);
     event_loop.run_app(&mut app).expect("run");
 }

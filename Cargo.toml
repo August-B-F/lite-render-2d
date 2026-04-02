@@ -1,5 +1,6 @@
 [workspace]
-members = ["core", "glow-backend"]
+members = ["core", "glow-backend", "wgpu-backend"]
+default-members = ["core", "glow-backend"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -10,4 +11,7 @@ glutin = "0.32"
 glutin-winit = "0.5"
 raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
+wgpu = "24"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
 lite-render-2d-core = { path = "core" }

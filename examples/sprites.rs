@@ -1,7 +1,10 @@
 use std::f32::consts::PI;
 
 use lite_render_2d_core::{Color, Renderer, SpriteParams, TextureHandle, TextureParams, Transform2D, Vec2};
-use lite_render_2d_glow::GlowRenderer;
+#[cfg(feature = "use-glow")]
+use lite_render_2d_glow::GlowRenderer as Renderer2D;
+#[cfg(feature = "use-wgpu")]
+use lite_render_2d_wgpu::WgpuRenderer as Renderer2D;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -48,7 +51,7 @@ fn make_checkerboard_png() -> Vec<u8> {
 
 struct App {
     window: Option<Window>,
-    renderer: Option<GlowRenderer>,
+    renderer: Option<Renderer2D>,
     texture: Option<TextureHandle>,
 }
 
@@ -59,7 +62,7 @@ impl ApplicationHandler for App {
         }
         let attrs = WindowAttributes::default().with_title("sprites");
         let win = event_loop.create_window(attrs).expect("create window");
-        let mut ren = GlowRenderer::new(&win).expect("create renderer");
+        let mut ren = Renderer2D::new(&win).expect("create renderer");
         ren.set_clear_color(Color::new(0.15, 0.15, 0.2, 1.0));
 
         let png_bytes = make_checkerboard_png();
