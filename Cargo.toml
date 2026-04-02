@@ -1,0 +1,12 @@
+[workspace]
+members = ["core", "glow-backend"]
+resolver = "2"
+
+[workspace.dependencies]
+thiserror = "2"
+winit = "0.30"
+glow = "0.16"
+glutin = "0.32"
+glutin-winit = "0.5"
+raw-window-handle = "0.6"
+lite-render-2d-core = { path = "core" }

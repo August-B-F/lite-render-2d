@@ -1,0 +1,8 @@
+[package]
+name = "lite-render-2d-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = { workspace = true }
+winit = { workspace = true }

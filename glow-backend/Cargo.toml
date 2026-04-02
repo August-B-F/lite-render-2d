@@ -1,0 +1,16 @@
+[package]
+name = "lite-render-2d-glow"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lite-render-2d-core = { workspace = true }
+glow = { workspace = true }
+glutin = { workspace = true }
+glutin-winit = { workspace = true }
+raw-window-handle = { workspace = true }
+winit = { workspace = true }
+
+[[example]]
+name = "shapes"
+path = "../examples/shapes.rs"
