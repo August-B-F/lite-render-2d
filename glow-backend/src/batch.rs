@@ -475,6 +475,7 @@ impl Batcher {
                         None => { i = end; continue; }
                     };
                     let instance_count = total_vert_len as usize / SPRITE_INST_SIZE;
+                    let byte_offset = vert_start as i32;
                     unsafe {
                         if cur_program != Some(ctx.inst_sprite_prog) {
                             ctx.gl.use_program(Some(ctx.inst_sprite_prog));
@@ -482,6 +483,15 @@ impl Batcher {
                             cur_program = Some(ctx.inst_sprite_prog);
                             cur_texture = None;
                         }
+                        // re-bind instance attribs with correct offset into instance VBO
+                        ctx.gl.bind_buffer(glow::ARRAY_BUFFER, Some(ctx.inst_data_vbo));
+                        let ist = SPRITE_INST_SIZE as i32;
+                        ctx.gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, ist, byte_offset);
+                        ctx.gl.vertex_attrib_pointer_f32(2, 2, glow::FLOAT, false, ist, byte_offset + 8);
+                        ctx.gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, ist, byte_offset + 16);
+                        ctx.gl.vertex_attrib_pointer_f32(4, 2, glow::FLOAT, false, ist, byte_offset + 20);
+                        ctx.gl.vertex_attrib_pointer_f32(5, 2, glow::FLOAT, false, ist, byte_offset + 28);
+                        ctx.gl.vertex_attrib_pointer_f32(6, 4, glow::UNSIGNED_BYTE, true, ist, byte_offset + 36);
                         if cur_texture != Some(texture_id) {
                             ctx.gl.active_texture(glow::TEXTURE0);
                             ctx.gl.bind_texture(glow::TEXTURE_2D, Some(gl_tex));

@@ -3,7 +3,7 @@ use crate::types::{Color, Rect, Vec2};
 
 use std::collections::HashMap;
 
-const ATLAS_SIZE: u32 = 1024;
+const ATLAS_SIZE: u32 = 512;
 
 #[derive(Hash, Eq, PartialEq, Clone, Copy)]
 struct GlyphKey {
@@ -277,7 +277,8 @@ impl FontSystem {
             };
 
             let mut cursor_x = params.position.x + x_offset;
-            let baseline_y = params.position.y + li as f32 * line_h;
+            // position.y is the top of the text line, shift baseline down by font size
+            let baseline_y = params.position.y + params.size + li as f32 * line_h;
 
             for ch in line.chars() {
                 let key = GlyphKey { font_id, ch, size_key };

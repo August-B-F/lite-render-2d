@@ -68,3 +68,15 @@ path = "../examples/test_optimizations.rs"
 [[example]]
 name = "integration_tests"
 path = "../examples/integration_tests.rs"
+
+[[example]]
+name = "perf_metrics"
+path = "../examples/perf_metrics.rs"
+
+[[example]]
+name = "gif_capture"
+path = "../examples/gif_capture.rs"
+
+[[example]]
+name = "stress_test"
+path = "../examples/stress_test.rs"

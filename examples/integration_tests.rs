@@ -4,6 +4,10 @@
 //! run with: cargo run -p lite-render-2d-glow --example integration_tests --release
 
 use lite_render_2d_core::prelude::*;
+use lite_render_2d_core::RoundedRect;
+use lite_render_2d_core::types::{NineSlice, Path, PathSegment, SpriteInstance, StrokeParams};
+use lite_render_2d_core::post_process::PostEffect;
+use lite_render_2d_core::tilemap::{Tilemap, TilesetInfo};
 #[cfg(feature = "use-glow")]
 use lite_render_2d_glow::GlowRenderer as Renderer2D;
 #[cfg(feature = "use-wgpu")]
@@ -582,6 +586,412 @@ impl ApplicationHandler for App {
                     }
                     ren.set_blend_mode(BlendMode::Alpha);
                     ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 10. transform stack
+                // -------------------------------------------------------
+
+                run_test!(results, "transform::push_pop_basic", {
+                    ren.begin_frame()?;
+                    ren.push_transform(Transform2D { pos: Vec2::new(10.0, 10.0), scale: Vec2::ONE, rotation: 0.0 });
+                    ren.draw_rect(Rect::new(0.0, 0.0, 50.0, 50.0), DrawParams::fill(Color::RED));
+                    ren.pop_transform();
+                    ren.draw_rect(Rect::new(0.0, 0.0, 50.0, 50.0), DrawParams::fill(Color::BLUE));
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "transform::nested_transforms", {
+                    ren.begin_frame()?;
+                    ren.push_transform(Transform2D { pos: Vec2::new(10.0, 0.0), scale: Vec2::ONE, rotation: 0.0 });
+                    ren.push_transform(Transform2D { pos: Vec2::new(0.0, 10.0), scale: Vec2::ONE, rotation: 0.0 });
+                    ren.draw_rect(Rect::new(0.0, 0.0, 20.0, 20.0), DrawParams::fill(Color::GREEN));
+                    ren.pop_transform();
+                    ren.pop_transform();
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "transform::reset_clears_stack", {
+                    ren.begin_frame()?;
+                    ren.push_transform(Transform2D { pos: Vec2::new(100.0, 100.0), scale: Vec2::ONE, rotation: 0.0 });
+                    ren.reset_transform();
+                    ren.draw_rect(Rect::new(0.0, 0.0, 30.0, 30.0), DrawParams::fill(Color::WHITE));
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 11. camera
+                // -------------------------------------------------------
+
+                run_test!(results, "camera::set_and_get", {
+                    let cam = Camera2D::new(800.0, 600.0).with_zoom(2.0).with_position(Vec2::new(100.0, 200.0));
+                    ren.set_camera(&cam);
+                    let got = ren.camera();
+                    assert!((got.zoom - 2.0).abs() < 0.01);
+                    assert!((got.position.x - 100.0).abs() < 0.01);
+                    // restore default
+                    ren.set_camera(&Camera2D::new(800.0, 600.0));
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "camera::draw_with_camera", {
+                    let cam = Camera2D::new(800.0, 600.0).with_position(Vec2::new(50.0, 50.0));
+                    ren.set_camera(&cam);
+                    ren.begin_frame()?;
+                    ren.draw_rect(Rect::new(0.0, 0.0, 100.0, 100.0), DrawParams::fill(Color::CYAN));
+                    ren.end_frame()?;
+                    ren.set_camera(&Camera2D::new(800.0, 600.0));
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 12. clipping
+                // -------------------------------------------------------
+
+                run_test!(results, "clip::push_pop_basic", {
+                    ren.begin_frame()?;
+                    ren.push_clip_rect(Rect::new(10.0, 10.0, 100.0, 100.0));
+                    ren.draw_rect(Rect::new(0.0, 0.0, 200.0, 200.0), DrawParams::fill(Color::RED));
+                    ren.pop_clip_rect();
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "clip::nested_clips", {
+                    ren.begin_frame()?;
+                    ren.push_clip_rect(Rect::new(0.0, 0.0, 400.0, 400.0));
+                    ren.push_clip_rect(Rect::new(50.0, 50.0, 100.0, 100.0));
+                    ren.draw_rect(Rect::new(0.0, 0.0, 800.0, 600.0), DrawParams::fill(Color::GREEN));
+                    ren.pop_clip_rect();
+                    ren.pop_clip_rect();
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "clip::draw_outside_clip", {
+                    ren.begin_frame()?;
+                    ren.push_clip_rect(Rect::new(10.0, 10.0, 20.0, 20.0));
+                    ren.draw_rect(Rect::new(500.0, 500.0, 100.0, 100.0), DrawParams::fill(Color::BLUE));
+                    ren.pop_clip_rect();
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 13. text
+                // -------------------------------------------------------
+
+                run_test!(results, "text::load_unload_font", {
+                    let font_data = std::fs::read("NotoSansMeroitic-Regular.ttf")
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+                    let h = ren.load_font(&font_data)?;
+                    ren.unload_font(h);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "text::load_font_invalid", {
+                    let result = ren.load_font(&[0, 1, 2, 3]);
+                    assert!(result.is_err());
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "text::draw_text_basic", {
+                    let font_data = std::fs::read("NotoSansMeroitic-Regular.ttf")
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+                    let h = ren.load_font(&font_data)?;
+                    ren.begin_frame()?;
+                    ren.draw_text("Hello", &TextParams {
+                        font: h, size: 24.0, color: Color::WHITE,
+                        align: TextAlign::Left, position: Vec2::new(10.0, 10.0),
+                        max_width: None, line_height: None,
+                    });
+                    ren.end_frame()?;
+                    ren.unload_font(h);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "text::measure_text_positive", {
+                    let font_data = std::fs::read("NotoSansMeroitic-Regular.ttf")
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+                    let h = ren.load_font(&font_data)?;
+                    let size = ren.measure_text("Hello World", &TextParams {
+                        font: h, size: 24.0, color: Color::WHITE,
+                        align: TextAlign::Left, position: Vec2::ZERO,
+                        max_width: None, line_height: None,
+                    });
+                    assert!(size.y > 0.0, "measured height should be positive");
+                    ren.unload_font(h);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "text::unload_then_draw_no_crash", {
+                    let font_data = std::fs::read("NotoSansMeroitic-Regular.ttf")
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+                    let h = ren.load_font(&font_data)?;
+                    ren.unload_font(h);
+                    ren.begin_frame()?;
+                    ren.draw_text("Test", &TextParams {
+                        font: h, size: 24.0, color: Color::WHITE,
+                        align: TextAlign::Left, position: Vec2::ZERO,
+                        max_width: None, line_height: None,
+                    });
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 14. paths
+                // -------------------------------------------------------
+
+                run_test!(results, "paths::draw_path_fill", {
+                    ren.begin_frame()?;
+                    let path = Path {
+                        segments: vec![
+                            PathSegment::MoveTo(Vec2::new(100.0, 100.0)),
+                            PathSegment::LineTo(Vec2::new(200.0, 100.0)),
+                            PathSegment::LineTo(Vec2::new(150.0, 200.0)),
+                            PathSegment::Close,
+                        ],
+                    };
+                    ren.draw_path(&path, DrawParams::fill(Color::RED));
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "paths::stroke_path_line", {
+                    ren.begin_frame()?;
+                    let path = Path {
+                        segments: vec![
+                            PathSegment::MoveTo(Vec2::new(10.0, 10.0)),
+                            PathSegment::LineTo(Vec2::new(200.0, 200.0)),
+                        ],
+                    };
+                    ren.stroke_path(&path, StrokeParams::new(Color::WHITE, 3.0));
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "paths::draw_path_empty", {
+                    ren.begin_frame()?;
+                    let path = Path { segments: vec![] };
+                    ren.draw_path(&path, DrawParams::fill(Color::RED));
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "paths::draw_complex_polygon", {
+                    ren.begin_frame()?;
+                    let outer = [
+                        Vec2::new(100.0, 100.0), Vec2::new(300.0, 100.0),
+                        Vec2::new(300.0, 300.0), Vec2::new(100.0, 300.0),
+                    ];
+                    ren.draw_complex_polygon(&outer, &[], DrawParams::fill(Color::GREEN));
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "paths::draw_complex_polygon_hole", {
+                    ren.begin_frame()?;
+                    let outer = [
+                        Vec2::new(100.0, 100.0), Vec2::new(300.0, 100.0),
+                        Vec2::new(300.0, 300.0), Vec2::new(100.0, 300.0),
+                    ];
+                    let hole = [
+                        Vec2::new(150.0, 150.0), Vec2::new(250.0, 150.0),
+                        Vec2::new(250.0, 250.0), Vec2::new(150.0, 250.0),
+                    ];
+                    ren.draw_complex_polygon(&outer, &[&hole[..]], DrawParams::fill(Color::BLUE));
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 15. render targets
+                // -------------------------------------------------------
+
+                run_test!(results, "rt::create_destroy", {
+                    let rt = ren.create_render_target(128, 128)?;
+                    ren.destroy_render_target(rt);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "rt::render_to_texture", {
+                    let rt = ren.create_render_target(128, 128)?;
+                    ren.begin_render_to_texture(rt)?;
+                    ren.begin_frame()?;
+                    ren.draw_rect(Rect::new(0.0, 0.0, 64.0, 64.0), DrawParams::fill(Color::RED));
+                    ren.end_frame()?;
+                    ren.end_render_to_texture();
+                    ren.destroy_render_target(rt);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "rt::render_target_texture", {
+                    let rt = ren.create_render_target(128, 128)?;
+                    let tex = ren.render_target_texture(rt);
+                    assert!(tex.is_some(), "render target should have a texture handle");
+                    ren.destroy_render_target(rt);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "rt::draw_rt_as_sprite", {
+                    let rt = ren.create_render_target(64, 64)?;
+                    ren.begin_render_to_texture(rt)?;
+                    ren.begin_frame()?;
+                    ren.draw_rect(Rect::new(0.0, 0.0, 64.0, 64.0), DrawParams::fill(Color::RED));
+                    ren.end_frame()?;
+                    ren.end_render_to_texture();
+                    let tex = ren.render_target_texture(rt).unwrap();
+                    ren.begin_frame()?;
+                    ren.draw_sprite(tex, SpriteParams {
+                        transform: Transform2D::default(),
+                        tint: Color::WHITE, src_rect: None,
+                        flip_x: false, flip_y: false,
+                        blend: BlendMode::Alpha, z_index: 0, opacity: 1.0,
+                    });
+                    ren.end_frame()?;
+                    ren.destroy_render_target(rt);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "rt::destroy_invalid_no_crash", {
+                    use lite_render_2d_core::texture::RenderTargetHandle;
+                    ren.destroy_render_target(RenderTargetHandle::new(99999));
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 16. post-processing
+                // -------------------------------------------------------
+
+                run_test!(results, "postfx::grayscale", {
+                    let rt = ren.create_render_target(128, 128)?;
+                    ren.begin_render_to_texture(rt)?;
+                    ren.begin_frame()?;
+                    ren.draw_rect(Rect::new(0.0, 0.0, 128.0, 128.0), DrawParams::fill(Color::RED));
+                    ren.end_frame()?;
+                    ren.end_render_to_texture();
+                    ren.begin_frame()?;
+                    ren.apply_post_effect(&PostEffect::Grayscale, rt);
+                    ren.end_frame()?;
+                    ren.destroy_render_target(rt);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                run_test!(results, "postfx::invert", {
+                    let rt = ren.create_render_target(128, 128)?;
+                    ren.begin_render_to_texture(rt)?;
+                    ren.begin_frame()?;
+                    ren.draw_rect(Rect::new(0.0, 0.0, 128.0, 128.0), DrawParams::fill(Color::BLUE));
+                    ren.end_frame()?;
+                    ren.end_render_to_texture();
+                    ren.begin_frame()?;
+                    ren.apply_post_effect(&PostEffect::Invert, rt);
+                    ren.end_frame()?;
+                    ren.destroy_render_target(rt);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 17. read pixels
+                // -------------------------------------------------------
+
+                run_test!(results, "pixels::read_from_rt", {
+                    let rt = ren.create_render_target(32, 32)?;
+                    ren.begin_render_to_texture(rt)?;
+                    ren.begin_frame()?;
+                    ren.draw_rect(Rect::new(0.0, 0.0, 32.0, 32.0), DrawParams::fill(Color::RED));
+                    ren.end_frame()?;
+                    ren.end_render_to_texture();
+                    let pixels = ren.read_pixels(rt);
+                    // read_pixels may return Err if not implemented, that's ok
+                    if let Ok(data) = pixels {
+                        assert!(!data.is_empty(), "pixel data should not be empty");
+                    }
+                    ren.destroy_render_target(rt);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 18. nine-slice
+                // -------------------------------------------------------
+
+                run_test!(results, "nineslice::draw_basic", {
+                    let png = make_1x1_png(255, 255, 255, 255);
+                    let tex = ren.load_texture(&png, TextureParams::default())?;
+                    let ns = NineSlice {
+                        texture: tex,
+                        border_left: 0.0, border_right: 0.0,
+                        border_top: 0.0, border_bottom: 0.0,
+                    };
+                    ren.begin_frame()?;
+                    ren.draw_nine_slice(&ns, Rect::new(10.0, 10.0, 100.0, 100.0), Color::WHITE, 0);
+                    ren.end_frame()?;
+                    ren.unload_texture(tex);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 19. tilemap
+                // -------------------------------------------------------
+
+                run_test!(results, "tilemap::draw_basic", {
+                    let png = make_1x1_png(100, 200, 100, 255);
+                    let tex = ren.load_texture(&png, TextureParams::default())?;
+                    let mut tm = Tilemap::new(4, 4, 16.0, tex, TilesetInfo {
+                        tile_width: 1.0, tile_height: 1.0, columns: 1,
+                    });
+                    tm.set_tile(0, 0, 1);
+                    tm.set_tile(1, 1, 1);
+                    ren.begin_frame()?;
+                    ren.draw_tilemap(&tm, Vec2::ZERO, 0);
+                    ren.end_frame()?;
+                    ren.unload_texture(tex);
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 20. stencil
+                // -------------------------------------------------------
+
+                run_test!(results, "stencil::write_and_pop", {
+                    ren.begin_frame()?;
+                    ren.begin_stencil_write();
+                    ren.draw_circle(Vec2::new(200.0, 200.0), 50.0, DrawParams::fill(Color::WHITE));
+                    ren.end_stencil_write();
+                    ren.draw_rect(Rect::new(0.0, 0.0, 400.0, 400.0), DrawParams::fill(Color::RED));
+                    ren.pop_stencil_mask();
+                    ren.end_frame()?;
+                    Ok::<(), Box<dyn std::error::Error>>(())
+                });
+
+                // -------------------------------------------------------
+                // 21. instanced sprites
+                // -------------------------------------------------------
+
+                run_test!(results, "instanced::draw_sprite_instanced", {
+                    let png = make_1x1_png(255, 0, 255, 255);
+                    let tex = ren.load_texture(&png, TextureParams::default())?;
+                    let instances: Vec<SpriteInstance> = (0..10).map(|i| SpriteInstance {
+                        transform: Transform2D {
+                            pos: Vec2::new(i as f32 * 20.0, 10.0),
+                            scale: Vec2::new(16.0, 16.0),
+                            rotation: 0.0,
+                        },
+                        tint: Color::WHITE,
+                        opacity: 1.0,
+                        src_rect: None,
+                        flip_x: false,
+                        flip_y: false,
+                    }).collect();
+                    ren.begin_frame()?;
+                    ren.draw_sprite_instanced(tex, &instances, BlendMode::Alpha, 0);
+                    ren.end_frame()?;
+                    ren.unload_texture(tex);
                     Ok::<(), Box<dyn std::error::Error>>(())
                 });
 

@@ -870,7 +870,11 @@ impl GlowRenderer {
                 (size.width as f32 / scale) as u32,
                 (size.height as f32 / scale) as u32,
             ),
-            cam: Camera2D::new(size.width as f32 / scale, size.height as f32 / scale),
+            cam: {
+                let lw = size.width as f32 / scale;
+                let lh = size.height as f32 / scale;
+                Camera2D::new(lw, lh).with_position(Vec2::new(lw / 2.0, lh / 2.0))
+            },
             shape_prog,
             shape_vaos,
             shape_loc_proj,
@@ -932,7 +936,7 @@ impl GlowRenderer {
             inst_quad_ibo,
             inst_data_vbo,
             inst_data_vbo_cap: INIT_VBO_CAP,
-            sprite_atlas: lite_render_2d_core::atlas::TextureAtlas::new(2048, 2048),
+            sprite_atlas: lite_render_2d_core::atlas::TextureAtlas::new(256, 256),
             sprite_atlas_gl_tex: None,
             sprite_atlas_tex_id: None,
             atlas_region_map: HashMap::new(),
@@ -965,6 +969,8 @@ impl Renderer for GlowRenderer {
         let lw = (width as f32 / self.scale_factor) as u32;
         let lh = (height as f32 / self.scale_factor) as u32;
         self.proj = screen_ortho(lw, lh);
+        self.cam = Camera2D::new(lw as f32, lh as f32)
+            .with_position(Vec2::new(lw as f32 / 2.0, lh as f32 / 2.0));
         self.surface.resize(
             &self.gl_ctx,
             NonZeroU32::new(width.max(1)).unwrap(),
@@ -996,6 +1002,8 @@ impl Renderer for GlowRenderer {
         self.frame_start = Instant::now();
         self.vbo_frame_idx = 1 - self.vbo_frame_idx;
         self.batcher.clear();
+        // ensure atlas is uploaded so draw_sprite can remap UVs to atlas space
+        self.upload_sprite_atlas_if_dirty();
         let c = self.clear_color;
         unsafe {
             self.gl.clear_color(c.r, c.g, c.b, c.a);

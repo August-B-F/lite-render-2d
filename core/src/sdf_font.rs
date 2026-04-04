@@ -4,7 +4,7 @@ use crate::font_atlas::GlyphQuad;
 
 use std::collections::HashMap;
 
-const SDF_ATLAS_SIZE: u32 = 1024;
+const SDF_ATLAS_SIZE: u32 = 512;
 const BASE_RENDER_SIZE: f32 = 64.0;
 const SDF_SPREAD: f32 = 6.0;
 
@@ -196,7 +196,8 @@ impl SdfFontSystem {
             };
 
             let mut cx = params.position.x + x_off;
-            let by = params.position.y + li as f32 * line_h;
+            // position.y is the top of the text line, shift baseline down by font size
+            let by = params.position.y + scale + li as f32 * line_h;
 
             for ch in line.chars() {
                 let key = SdfGlyphKey { font_id, ch };
