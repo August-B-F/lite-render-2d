@@ -267,7 +267,7 @@ impl App {
         ren.begin_frame().expect("begin");
         ren.draw_text("hello world 123", &TextParams {
             font, size: 24.0, color: Color::WHITE, position: Vec2::new(10.0, 10.0),
-            align: TextAlign::Left, max_width: None, line_height: None,
+            align: TextAlign::Left, max_width: None, line_height: None, z: 0,
         });
         let stats_a = ren.end_frame().expect("end");
 
@@ -275,7 +275,7 @@ impl App {
         ren.begin_frame().expect("begin");
         ren.draw_text("ABCDEFGHIJ @#$%", &TextParams {
             font, size: 24.0, color: Color::WHITE, position: Vec2::new(10.0, 50.0),
-            align: TextAlign::Left, max_width: None, line_height: None,
+            align: TextAlign::Left, max_width: None, line_height: None, z: 0,
         });
         let stats_b = ren.end_frame().expect("end");
 

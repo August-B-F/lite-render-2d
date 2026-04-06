@@ -179,6 +179,24 @@ impl Vec2 {
     pub fn distance_to(self, other: Self) -> f32 {
         (self - other).length()
     }
+
+    /// unit vector from angle in radians (0 = right, PI/2 = down in y-down coords)
+    pub fn from_angle(radians: f32) -> Self {
+        Self { x: radians.cos(), y: radians.sin() }
+    }
+
+    /// angle of the vector in radians via atan2(y, x)
+    pub fn angle(self) -> f32 {
+        self.y.atan2(self.x)
+    }
+
+    /// linear interpolation between self and other
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self {
+            x: self.x + (other.x - self.x) * t,
+            y: self.y + (other.y - self.y) * t,
+        }
+    }
 }
 
 /// axis-aligned rectangle, top-left origin
@@ -259,7 +277,7 @@ impl Default for Transform2D {
 }
 
 /// texture sampling filter
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterMode {
     /// sharp pixels, good for pixel art
     Nearest,
@@ -463,9 +481,16 @@ pub struct SpriteParams {
     pub blend: BlendMode,
     pub z_index: i32,
     pub opacity: f32,
+    /// normalized origin/pivot point (0..1). (0,0) = top-left, (0.5,0.5) = center.
+    pub origin: Vec2,
 }
 
 impl SpriteParams {
+    /// create sprite params positioned at (x, y) with default settings
+    pub fn at(x: f32, y: f32) -> Self {
+        Self::new(Transform2D::new(x, y))
+    }
+
     pub fn new(transform: Transform2D) -> Self {
         Self {
             transform,
@@ -476,6 +501,7 @@ impl SpriteParams {
             blend: BlendMode::Alpha,
             z_index: 0,
             opacity: 1.0,
+            origin: Vec2::ZERO,
         }
     }
 
@@ -509,6 +535,18 @@ impl SpriteParams {
         self.blend = blend;
         self
     }
+
+    /// set the origin/pivot point (normalized 0..1). (0.5, 0.5) = center.
+    pub fn with_origin(mut self, origin: Vec2) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    /// set origin to center (0.5, 0.5) — sprite rotates/scales around its center
+    pub fn centered(mut self) -> Self {
+        self.origin = Vec2::new(0.5, 0.5);
+        self
+    }
 }
 
 /// per-instance data for instanced sprite drawing
@@ -520,6 +558,8 @@ pub struct SpriteInstance {
     pub src_rect: Option<Rect>,
     pub flip_x: bool,
     pub flip_y: bool,
+    /// normalized origin/pivot point (0..1). (0,0) = top-left, (0.5,0.5) = center.
+    pub origin: Vec2,
 }
 
 impl SpriteInstance {
@@ -531,6 +571,7 @@ impl SpriteInstance {
             src_rect: None,
             flip_x: false,
             flip_y: false,
+            origin: Vec2::ZERO,
         }
     }
 }

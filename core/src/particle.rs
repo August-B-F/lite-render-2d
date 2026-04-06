@@ -188,6 +188,7 @@ impl ParticleSystem {
                         blend: BlendMode::Alpha,
                         z_index: 0,
                         opacity: color.a,
+                        origin: Vec2::ZERO,
                     });
                 }
                 None => {

@@ -80,3 +80,7 @@ path = "../examples/gif_capture.rs"
 [[example]]
 name = "stress_test"
 path = "../examples/stress_test.rs"
+
+[[example]]
+name = "swarm"
+path = "../examples/swarm.rs"

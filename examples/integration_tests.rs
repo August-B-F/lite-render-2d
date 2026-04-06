@@ -707,7 +707,7 @@ impl ApplicationHandler for App {
                     ren.draw_text("Hello", &TextParams {
                         font: h, size: 24.0, color: Color::WHITE,
                         align: TextAlign::Left, position: Vec2::new(10.0, 10.0),
-                        max_width: None, line_height: None,
+                        max_width: None, line_height: None, z: 0,
                     });
                     ren.end_frame()?;
                     ren.unload_font(h);
@@ -721,7 +721,7 @@ impl ApplicationHandler for App {
                     let size = ren.measure_text("Hello World", &TextParams {
                         font: h, size: 24.0, color: Color::WHITE,
                         align: TextAlign::Left, position: Vec2::ZERO,
-                        max_width: None, line_height: None,
+                        max_width: None, line_height: None, z: 0,
                     });
                     assert!(size.y > 0.0, "measured height should be positive");
                     ren.unload_font(h);
@@ -737,7 +737,7 @@ impl ApplicationHandler for App {
                     ren.draw_text("Test", &TextParams {
                         font: h, size: 24.0, color: Color::WHITE,
                         align: TextAlign::Left, position: Vec2::ZERO,
-                        max_width: None, line_height: None,
+                        max_width: None, line_height: None, z: 0,
                     });
                     ren.end_frame()?;
                     Ok::<(), Box<dyn std::error::Error>>(())

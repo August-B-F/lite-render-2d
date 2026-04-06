@@ -57,7 +57,13 @@ impl Camera2D {
         self.shake_elapsed = 0.0;
     }
 
-    /// smoothly lerp camera toward target position
+    /// smoothly lerp camera toward target position.
+    ///
+    /// formula: `position += (target - position) * min(smoothing * dt, 1.0)`
+    ///
+    /// `smoothing` controls convergence speed — higher = faster.
+    /// practical values: 2-5 for gentle follow, 8-12 for snappy, 0.5 for very slow drift.
+    /// the min(…, 1.0) clamp prevents overshoot on frame spikes.
     pub fn follow(&mut self, target: Vec2, smoothing: f32, dt: f32) {
         let t = (smoothing * dt).min(1.0);
         self.position.x += (target.x - self.position.x) * t;

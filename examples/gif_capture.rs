@@ -62,12 +62,12 @@ fn render_scene(
         ren.draw_text("lite-render-2d", &TextParams {
             font: f, size: 18.0, color: Color::new(0.9, 0.9, 0.95, 1.0),
             align: TextAlign::Left, position: Vec2::new(12.0, 7.0),
-            max_width: None, line_height: None,
+            max_width: None, line_height: None, z: 0,
         });
         ren.draw_text("feature showcase", &TextParams {
             font: f, size: 12.0, color: Color::new(0.5, 0.5, 0.6, 1.0),
             align: TextAlign::Left, position: Vec2::new(200.0, 11.0),
-            max_width: None, line_height: None,
+            max_width: None, line_height: None, z: 0,
         });
     }
 
@@ -189,7 +189,7 @@ fn render_scene(
             ren.draw_text(label, &TextParams {
                 font: f, size: 10.0, color: Color::new(0.6, 0.6, 0.7, 0.8),
                 align: TextAlign::Left, position: Vec2::new(lx, ly),
-                max_width: None, line_height: None,
+                max_width: None, line_height: None, z: 0,
             });
         }
     }
@@ -202,12 +202,12 @@ fn render_scene(
         ren.draw_text("I must not fear. Fear is the mind-killer.", &TextParams {
             font: f, size: 14.0, color: Color::new(0.85, 0.75, 0.5, alpha),
             align: TextAlign::Center, position: Vec2::new(0.0, h - 32.0),
-            max_width: Some(w), line_height: None,
+            max_width: Some(w), line_height: None, z: 0,
         });
         ren.draw_text("- Frank Herbert, Dune", &TextParams {
             font: f, size: 10.0, color: Color::new(0.5, 0.45, 0.35, alpha * 0.7),
             align: TextAlign::Center, position: Vec2::new(0.0, h - 14.0),
-            max_width: Some(w), line_height: None,
+            max_width: Some(w), line_height: None, z: 0,
         });
     }
 }

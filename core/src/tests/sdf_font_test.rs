@@ -13,6 +13,7 @@ fn make_params(font: FontHandle, size: f32) -> TextParams {
         position: Vec2::ZERO,
         max_width: None,
         line_height: None,
+        z: 0,
     }
 }
 

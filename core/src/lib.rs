@@ -78,7 +78,7 @@ pub use collision::{circle_contains, circle_intersects_rect, line_intersects_lin
 pub use renderer::{Renderer, RendererError};
 pub use sprite_sheet::{PlaybackMode, SpriteAnimation, SpriteSheet};
 pub use text::{FontHandle, TextAlign, TextParams};
-pub use texture::{RenderTargetHandle, TextureHandle, TextureParams};
+pub use texture::{AtlasHandle, RenderTargetHandle, TextureHandle, TextureParams};
 pub use particle::{ParticleConfig, ParticleEmitter, ParticleSystem};
 pub use post_process::PostEffect;
 pub use tilemap::{AnimatedTile, Tilemap, TilemapProjection, TilesetInfo, TILE_FLIP_H, TILE_FLIP_V, TILE_ID_MASK};

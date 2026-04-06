@@ -85,6 +85,9 @@ pub struct WgpuRenderer {
     // sdf font system
     sdf_font_system: lite_render_2d_core::sdf_font::SdfFontSystem,
     sdf_atlas_tex_id: Option<u64>,
+    // current frame surface (acquired in begin_frame for mid-frame flushes)
+    current_frame: Option<wgpu::SurfaceTexture>,
+    current_frame_view: Option<wgpu::TextureView>,
 }
 
 fn intersect_rects(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -117,6 +120,30 @@ fn f32_as_bytes(data: &[f32]) -> &[u8] {
 impl WgpuRenderer {
     pub fn draw_calls(&self) -> u32 {
         self.batcher.draw_calls()
+    }
+
+    // flush pending draws to the active target (surface or render target)
+    fn flush_batch(&mut self) {
+        if self.batcher.commands.is_empty() {
+            return;
+        }
+
+        if let Some(rt_id) = self.active_render_target {
+            // flush to render target
+            if let Some(rt) = self.render_targets.get(&rt_id) {
+                let (rt_w, rt_h) = (rt.width, rt.height);
+                let view_ptr = &rt.view as *const wgpu::TextureView;
+                let view_ref = unsafe { &*view_ptr };
+                self.flush_to_view(view_ref, None, rt_w, rt_h);
+            }
+        } else if let Some(ref view) = self.current_frame_view {
+            // flush to surface with LoadOp::Load (clear already done in begin_frame)
+            let view_ptr = view as *const wgpu::TextureView;
+            let view_ref = unsafe { &*view_ptr };
+            let (w, h) = (self.w, self.h);
+            self.flush_to_view(view_ref, None, w, h);
+        }
+        self.batcher.clear();
     }
 
     // flush current batch to a given texture view with explicit viewport dimensions
@@ -290,6 +317,91 @@ impl WgpuRenderer {
             verts[base] = p.x;
             verts[base + 1] = p.y;
         }
+    }
+
+    fn upload_rgba(
+        &mut self,
+        pixels: &[u8],
+        w: u32,
+        h: u32,
+        params: TextureParams,
+    ) -> Result<TextureHandle, RendererError> {
+        let tex_size = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        };
+
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sprite_tex"),
+            size: tex_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(h),
+            },
+            tex_size,
+        );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let filter = match params.filter {
+            FilterMode::Nearest => wgpu::FilterMode::Nearest,
+            FilterMode::Linear => wgpu::FilterMode::Linear,
+        };
+        let address_mode = match params.wrap {
+            WrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
+            WrapMode::Repeat => wgpu::AddressMode::Repeat,
+        };
+
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sprite_sampler"),
+            address_mode_u: address_mode,
+            address_mode_v: address_mode,
+            mag_filter: filter,
+            min_filter: filter,
+            ..Default::default()
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sprite_bg"),
+            layout: &self.sprite_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.proj_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        let id = self.next_tex_id;
+        self.next_tex_id += 1;
+        self.textures.insert(id, TextureInfo { bind_group, width: w, height: h });
+        Ok(TextureHandle::new(id))
     }
 }
 
@@ -802,6 +914,8 @@ impl Renderer for WgpuRenderer {
             sdf_pipelines,
             sdf_font_system: lite_render_2d_core::sdf_font::SdfFontSystem::new(),
             sdf_atlas_tex_id: None,
+            current_frame: None,
+            current_frame_view: None,
         })
     }
 
@@ -820,6 +934,8 @@ impl Renderer for WgpuRenderer {
     }
 
     fn set_camera(&mut self, camera: &Camera2D) {
+        // flush pending draws before changing projection
+        self.flush_batch();
         self.cam = *camera;
         self.proj = camera.projection_matrix();
     }
@@ -838,6 +954,44 @@ impl Renderer for WgpuRenderer {
 
     fn begin_frame(&mut self) -> Result<(), RendererError> {
         self.batcher.clear();
+        let output = self
+            .surface
+            .get_current_texture()
+            .map_err(|e| RendererError::Surface(e.to_string()))?;
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // explicit clear pass so all mid-frame flushes can use LoadOp::Load
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("begin_frame_clear"),
+            });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: self.clear_color.r as f64,
+                            g: self.clear_color.g as f64,
+                            b: self.clear_color.b as f64,
+                            a: self.clear_color.a as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        self.current_frame = Some(output);
+        self.current_frame_view = Some(view);
         Ok(())
     }
 
@@ -1225,83 +1379,24 @@ impl Renderer for WgpuRenderer {
             .into_rgba8();
         let (w, h) = img.dimensions();
         let pixels = img.into_raw();
+        self.upload_rgba(&pixels, w, h, params)
+    }
 
-        let tex_size = wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        };
-
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("sprite_tex"),
-            size: tex_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * w),
-                rows_per_image: Some(h),
-            },
-            tex_size,
-        );
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let filter = match params.filter {
-            FilterMode::Nearest => wgpu::FilterMode::Nearest,
-            FilterMode::Linear => wgpu::FilterMode::Linear,
-        };
-        let address_mode = match params.wrap {
-            WrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
-            WrapMode::Repeat => wgpu::AddressMode::Repeat,
-        };
-
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("sprite_sampler"),
-            address_mode_u: address_mode,
-            address_mode_v: address_mode,
-            mag_filter: filter,
-            min_filter: filter,
-            ..Default::default()
-        });
-
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sprite_bg"),
-            layout: &self.sprite_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.proj_uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        let id = self.next_tex_id;
-        self.next_tex_id += 1;
-        self.textures.insert(id, TextureInfo { bind_group, width: w, height: h });
-        Ok(TextureHandle::new(id))
+    fn load_texture_raw(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        params: TextureParams,
+    ) -> Result<TextureHandle, RendererError> {
+        let expected = (width as usize) * (height as usize) * 4;
+        if rgba.len() != expected {
+            return Err(RendererError::Texture(format!(
+                "expected {} bytes for {}x{} RGBA8, got {}",
+                expected, width, height, rgba.len()
+            )));
+        }
+        self.upload_rgba(rgba, width, height, params)
     }
 
     fn texture_size(&self, handle: TextureHandle) -> Option<(u32, u32)> {
@@ -1333,16 +1428,18 @@ impl Renderer for WgpuRenderer {
         let cos = t.rotation.cos();
         let sin = t.rotation.sin();
 
+        let ox = params.origin.x;
+        let oy = params.origin.y;
         let transform = |px: f32, py: f32| -> (f32, f32) {
             let x = cos * sx * px + (-sin * sy) * py + t.pos.x;
             let y = sin * sx * px + cos * sy * py + t.pos.y;
             (x, y)
         };
 
-        let (x0, y0) = transform(0.0, 0.0);
-        let (x1, y1) = transform(1.0, 0.0);
-        let (x2, y2) = transform(1.0, 1.0);
-        let (x3, y3) = transform(0.0, 1.0);
+        let (x0, y0) = transform(0.0 - ox, 0.0 - oy);
+        let (x1, y1) = transform(1.0 - ox, 0.0 - oy);
+        let (x2, y2) = transform(1.0 - ox, 1.0 - oy);
+        let (x3, y3) = transform(0.0 - ox, 1.0 - oy);
 
         let (uv_min_x, uv_min_y, uv_max_x, uv_max_y) = match params.src_rect {
             Some(r) => (
@@ -1485,7 +1582,7 @@ impl Renderer for WgpuRenderer {
                 x,     y + h, u0, v1, r, g, b, a, 1.0,
             ];
 
-            self.batcher.push_sprite(atlas_id, &verts, 0, BlendMode::Alpha, self.current_clip);
+            self.batcher.push_sprite(atlas_id, &verts, params.z, BlendMode::Alpha, self.current_clip);
         }
     }
 
@@ -1499,16 +1596,14 @@ impl Renderer for WgpuRenderer {
             self.end_render_to_texture();
         }
 
-        let output = self
-            .surface
-            .get_current_texture()
-            .map_err(|e| RendererError::Surface(e.to_string()))?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        // flush remaining draws to surface (LoadOp::Load — clear was done in begin_frame)
+        self.flush_batch();
 
-        let (w, h) = (self.w, self.h);
-        self.flush_to_view(&view, Some(self.clear_color), w, h);
+        let output = self
+            .current_frame
+            .take()
+            .ok_or_else(|| RendererError::Other("no active frame (missing begin_frame?)".into()))?;
+        self.current_frame_view = None;
 
         output.present();
         Ok(FrameStats::default())
@@ -1769,6 +1864,7 @@ impl Renderer for WgpuRenderer {
                 flip_y: inst.flip_y,
                 blend,
                 z_index,
+                origin: inst.origin,
             });
         }
     }

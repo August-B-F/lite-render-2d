@@ -35,4 +35,6 @@ pub struct TextParams {
     pub max_width: Option<f32>,
     /// override line height (defaults to font size if None)
     pub line_height: Option<f32>,
+    /// z-index for draw ordering (default 0)
+    pub z: i32,
 }

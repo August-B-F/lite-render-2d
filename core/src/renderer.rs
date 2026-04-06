@@ -1,7 +1,8 @@
 use crate::camera::Camera2D;
 use crate::post_process::PostEffect;
 use crate::text::{FontHandle, TextParams};
-use crate::texture::{RenderTargetHandle, TextureHandle, TextureParams};
+use crate::atlas::AtlasRegion;
+use crate::texture::{AtlasHandle, RenderTargetHandle, TextureHandle, TextureParams};
 use crate::tilemap::Tilemap;
 use crate::types::{
     BlendMode, Color, DrawParams, FrameStats, LineParams, MaterialHandle, NineSlice, Path, Rect,
@@ -57,6 +58,25 @@ pub trait Renderer {
 
     /// set the global blend mode
     fn set_blend_mode(&mut self, mode: BlendMode);
+
+    /// switch to screen-space camera for HUD drawing.
+    /// coordinates map to pixels: (0,0) = top-left, (width, height) = bottom-right.
+    /// returns the saved camera to pass to end_screen_space().
+    fn begin_screen_space(&mut self) -> Camera2D {
+        let saved = *self.camera();
+        let vp = self.camera().viewport;
+        // camera position is the center of the visible area, so set it to
+        // half the viewport so that (0,0) maps to the top-left corner
+        let screen_cam = Camera2D::new(vp.x, vp.y)
+            .with_position(Vec2::new(vp.x * 0.5, vp.y * 0.5));
+        self.set_camera(&screen_cam);
+        saved
+    }
+
+    /// restore a previously saved camera (from begin_screen_space)
+    fn end_screen_space(&mut self, saved: Camera2D) {
+        self.set_camera(&saved);
+    }
 
     /// start a new frame
     fn begin_frame(&mut self) -> Result<(), RendererError>;
@@ -133,6 +153,15 @@ pub trait Renderer {
     fn load_texture(
         &mut self,
         data: &[u8],
+        params: TextureParams,
+    ) -> Result<TextureHandle, RendererError>;
+
+    /// load a texture from pre-decoded RGBA8 pixel data
+    fn load_texture_raw(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
         params: TextureParams,
     ) -> Result<TextureHandle, RendererError>;
 
@@ -234,6 +263,37 @@ pub trait Renderer {
     /// pop stencil mask, restoring previous state
     fn pop_stencil_mask(&mut self) {}
 
+    // -- texture atlas --
+
+    /// create a user-managed texture atlas for packing many small sprites
+    fn create_atlas(
+        &mut self,
+        _width: u32,
+        _height: u32,
+        _params: TextureParams,
+    ) -> Result<AtlasHandle, RendererError> {
+        Err(RendererError::Other("create_atlas not implemented".into()))
+    }
+
+    /// pack an RGBA8 image into an atlas, returns the region for use as src_rect
+    fn atlas_pack(
+        &mut self,
+        _atlas: AtlasHandle,
+        _rgba: &[u8],
+        _width: u32,
+        _height: u32,
+    ) -> Result<AtlasRegion, RendererError> {
+        Err(RendererError::Other("atlas_pack not implemented".into()))
+    }
+
+    /// get the texture handle for an atlas (uploads/re-uploads if dirty)
+    fn atlas_texture(
+        &mut self,
+        _atlas: AtlasHandle,
+    ) -> Result<TextureHandle, RendererError> {
+        Err(RendererError::Other("atlas_texture not implemented".into()))
+    }
+
     // -- instanced drawing --
 
     /// draw many copies of a sprite with per-instance transforms
@@ -255,6 +315,7 @@ pub trait Renderer {
                 flip_y: inst.flip_y,
                 blend,
                 z_index,
+                origin: inst.origin,
             });
         }
     }
@@ -300,6 +361,7 @@ pub trait Renderer {
                 blend: BlendMode::Alpha,
                 z_index,
                 opacity: 1.0,
+                origin: Vec2::ZERO,
             });
         };
 
@@ -403,6 +465,7 @@ pub trait Renderer {
                         blend: BlendMode::Alpha,
                         z_index: z_index + layer as i32,
                         opacity: 1.0,
+                        origin: Vec2::ZERO,
                     });
                 }
             }

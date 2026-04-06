@@ -334,6 +334,52 @@ fn test_vec2_default_is_zero() {
     assert_eq!(Vec2::default(), Vec2::ZERO);
 }
 
+#[test]
+fn test_vec2_from_angle_zero() {
+    let v = Vec2::from_angle(0.0);
+    assert!((v.x - 1.0).abs() < 1e-6);
+    assert!(v.y.abs() < 1e-6);
+}
+
+#[test]
+fn test_vec2_from_angle_half_pi() {
+    let v = Vec2::from_angle(std::f32::consts::FRAC_PI_2);
+    assert!(v.x.abs() < 1e-6);
+    assert!((v.y - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_vec2_angle_right() {
+    assert!(Vec2::RIGHT.angle().abs() < 1e-6);
+}
+
+#[test]
+fn test_vec2_angle_roundtrip() {
+    let original = Vec2::new(3.0, 4.0).normalize();
+    let reconstructed = Vec2::from_angle(original.angle());
+    assert!((original.x - reconstructed.x).abs() < 1e-5);
+    assert!((original.y - reconstructed.y).abs() < 1e-5);
+}
+
+#[test]
+fn test_vec2_lerp_endpoints() {
+    let a = Vec2::new(1.0, 2.0);
+    let b = Vec2::new(5.0, 10.0);
+    let at0 = a.lerp(b, 0.0);
+    let at1 = a.lerp(b, 1.0);
+    assert!((at0.x - a.x).abs() < 1e-6);
+    assert!((at0.y - a.y).abs() < 1e-6);
+    assert!((at1.x - b.x).abs() < 1e-6);
+    assert!((at1.y - b.y).abs() < 1e-6);
+}
+
+#[test]
+fn test_vec2_lerp_midpoint() {
+    let v = Vec2::ZERO.lerp(Vec2::new(10.0, 20.0), 0.5);
+    assert!((v.x - 5.0).abs() < 1e-6);
+    assert!((v.y - 10.0).abs() < 1e-6);
+}
+
 // ============================
 // Rect tests
 // ============================

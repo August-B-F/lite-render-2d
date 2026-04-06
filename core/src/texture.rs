@@ -35,6 +35,20 @@ impl RenderTargetHandle {
     }
 }
 
+/// opaque handle to a user-created texture atlas
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AtlasHandle(pub(crate) u64);
+
+impl AtlasHandle {
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub fn id(&self) -> u64 {
+        self.0
+    }
+}
+
 impl TextureParams {
     /// pixel-art friendly: nearest filter, clamp wrap
     pub fn nearest() -> Self {

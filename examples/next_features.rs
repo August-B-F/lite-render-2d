@@ -287,6 +287,7 @@ impl ApplicationHandler for App {
                             position: Vec2::new(30.0, y_offset),
                             max_width: None,
                             line_height: None,
+                            z: 0,
                         };
 
                         // measure text to get bounding box

@@ -6,10 +6,10 @@ use glow::HasContext;
 use glutin::surface::GlSurface;
 
 use lite_render_2d_core::{
-    BlendMode, Camera2D, Color, DrawParams, DrawStyle, FilterMode, FontHandle, FrameStats,
-    LineParams, Path, PostEffect, Rect, RenderTargetHandle, Renderer, RendererError, RoundedRect,
-    SpriteInstance, SpriteParams, StrokeParams, TextParams, TextureHandle, TextureParams,
-    Transform2D, Vec2, WrapMode,
+    AtlasHandle, AtlasRegion, BlendMode, Camera2D, Color, DrawParams, DrawStyle, FilterMode,
+    FontHandle, FrameStats, LineParams, Path, PostEffect, Rect, RenderTargetHandle, Renderer,
+    RendererError, RoundedRect, SpriteInstance, SpriteParams, StrokeParams, TextParams,
+    TextureHandle, TextureParams, Transform2D, Vec2, WrapMode,
 };
 
 use crate::batch::{Batcher, FlushContext};
@@ -20,6 +20,14 @@ struct TextureInfo {
     gl_tex: glow::Texture,
     width: u32,
     height: u32,
+}
+
+struct UserAtlas {
+    atlas: lite_render_2d_core::atlas::TextureAtlas,
+    gl_tex: Option<glow::Texture>,
+    params: TextureParams,
+    tex_handle_id: Option<u64>,
+    dirty: bool,
 }
 
 struct RenderTargetInfo {
@@ -73,8 +81,6 @@ pub struct GlowRenderer {
     current_clip: Option<[u32; 4]>,
     // blend mode
     current_blend: BlendMode,
-    // dpi scale factor
-    scale_factor: f32,
     // post-processing effect programs
     effect_grayscale_prog: glow::Program,
     effect_invert_prog: glow::Program,
@@ -111,13 +117,20 @@ pub struct GlowRenderer {
     sdf_font_system: lite_render_2d_core::sdf_font::SdfFontSystem,
     sdf_atlas_tex_id: Option<u64>,
     sdf_atlas_gl_tex: Option<glow::Texture>,
-    // sprite texture atlas for small textures
+    // sprite texture atlas for small textures (LINEAR filtered)
     sprite_atlas: lite_render_2d_core::atlas::TextureAtlas,
     sprite_atlas_gl_tex: Option<glow::Texture>,
     sprite_atlas_tex_id: Option<u64>,
     atlas_region_map: HashMap<u64, lite_render_2d_core::atlas::AtlasRegion>,
     atlas_dirty: bool,
     atlas_image_indices: HashMap<u64, usize>, // tex_id -> image index for regrow
+    // sprite texture atlas for small textures (NEAREST filtered — pixel art)
+    nearest_atlas: lite_render_2d_core::atlas::TextureAtlas,
+    nearest_atlas_gl_tex: Option<glow::Texture>,
+    nearest_atlas_tex_id: Option<u64>,
+    nearest_atlas_region_map: HashMap<u64, lite_render_2d_core::atlas::AtlasRegion>,
+    nearest_atlas_dirty: bool,
+    nearest_atlas_image_indices: HashMap<u64, usize>,
     // instanced sprite pipeline
     inst_sprite_prog: glow::Program,
     inst_sprite_vao: glow::VertexArray,
@@ -138,6 +151,9 @@ pub struct GlowRenderer {
     // cached texture map to avoid per-frame alloc
     cached_gl_tex_map: HashMap<u64, glow::Texture>,
     tex_map_dirty: bool,
+    // user-created texture atlases
+    user_atlases: HashMap<u64, UserAtlas>,
+    next_atlas_id: u64,
 }
 
 fn intersect_rects(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
@@ -186,9 +202,7 @@ impl GlowRenderer {
         self.atlas_dirty = false;
 
         if let Some(tex) = self.sprite_atlas_gl_tex {
-            // atlas already exists, check for partial update
             if let Some((dx, dy, dw, dh)) = self.sprite_atlas.dirty_region() {
-                // partial upload: only the changed region
                 let sub = self.sprite_atlas.atlas_sub_data(dx, dy, dw, dh);
                 unsafe {
                     self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
@@ -203,7 +217,6 @@ impl GlowRenderer {
                 self.sprite_atlas.clear_dirty();
             }
         } else {
-            // first time: create gl texture with full atlas data
             let (data, aw, ah) = self.sprite_atlas.texture_data();
             let tex = unsafe {
                 let t = self.gl.create_texture().expect("create atlas tex");
@@ -223,8 +236,6 @@ impl GlowRenderer {
             };
             self.sprite_atlas_gl_tex = Some(tex);
             self.gpu_ram_bytes += (aw as u64) * (ah as u64) * 4;
-
-            // register as a texture so the batcher can look it up
             let atlas_tex_id = self.next_tex_id;
             self.next_tex_id += 1;
             self.textures.insert(atlas_tex_id, TextureInfo { gl_tex: tex, width: aw, height: ah });
@@ -232,7 +243,6 @@ impl GlowRenderer {
             self.sprite_atlas.clear_dirty();
         }
 
-        // update all atlas-packed textures to point to the atlas gl tex
         let gl_tex = match self.sprite_atlas_gl_tex {
             Some(t) => t,
             None => return,
@@ -249,8 +259,73 @@ impl GlowRenderer {
         self.tex_map_dirty = true;
     }
 
+    fn upload_nearest_atlas_if_dirty(&mut self) {
+        if !self.nearest_atlas_dirty {
+            return;
+        }
+        self.nearest_atlas_dirty = false;
+
+        if let Some(tex) = self.nearest_atlas_gl_tex {
+            if let Some((dx, dy, dw, dh)) = self.nearest_atlas.dirty_region() {
+                let sub = self.nearest_atlas.atlas_sub_data(dx, dy, dw, dh);
+                unsafe {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                    self.gl.tex_sub_image_2d(
+                        glow::TEXTURE_2D, 0,
+                        dx as i32, dy as i32, dw as i32, dh as i32,
+                        glow::RGBA, glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&sub)),
+                    );
+                    self.gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+                self.nearest_atlas.clear_dirty();
+            }
+        } else {
+            let (data, aw, ah) = self.nearest_atlas.texture_data();
+            let tex = unsafe {
+                let t = self.gl.create_texture().expect("create nearest atlas tex");
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                self.gl.tex_image_2d(
+                    glow::TEXTURE_2D, 0, glow::RGBA8 as i32,
+                    aw as i32, ah as i32, 0,
+                    glow::RGBA, glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(data)),
+                );
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+                self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+                self.gl.bind_texture(glow::TEXTURE_2D, None);
+                t
+            };
+            self.nearest_atlas_gl_tex = Some(tex);
+            self.gpu_ram_bytes += (aw as u64) * (ah as u64) * 4;
+            let atlas_tex_id = self.next_tex_id;
+            self.next_tex_id += 1;
+            self.textures.insert(atlas_tex_id, TextureInfo { gl_tex: tex, width: aw, height: ah });
+            self.nearest_atlas_tex_id = Some(atlas_tex_id);
+            self.nearest_atlas.clear_dirty();
+        }
+
+        let gl_tex = match self.nearest_atlas_gl_tex {
+            Some(t) => t,
+            None => return,
+        };
+        let atlas_tex_id = self.nearest_atlas_tex_id.unwrap();
+        for &id in self.nearest_atlas_region_map.keys() {
+            if let Some(info) = self.textures.get_mut(&id) {
+                info.gl_tex = gl_tex;
+            }
+        }
+        if let Some(info) = self.textures.get_mut(&atlas_tex_id) {
+            info.gl_tex = gl_tex;
+        }
+        self.tex_map_dirty = true;
+    }
+
     fn flush_batch(&mut self) {
         self.upload_sprite_atlas_if_dirty();
+        self.upload_nearest_atlas_if_dirty();
         self.rebuild_tex_map_if_dirty();
         let viewport_h = if let Some(rt_id) = self.active_render_target {
             self.render_targets.get(&rt_id).map(|rt| rt.height).unwrap_or(self.h)
@@ -288,10 +363,113 @@ impl GlowRenderer {
         self.shape_vbo_caps[fi] = sc;
         self.sprite_vbo_caps[fi] = spc;
         self.inst_data_vbo_cap = ic;
+        self.batcher.clear();
     }
 }
 
 impl GlowRenderer {
+    fn upload_rgba(
+        &mut self,
+        pixels: &[u8],
+        w: u32,
+        h: u32,
+        params: TextureParams,
+    ) -> Result<TextureHandle, RendererError> {
+        // try packing small textures into the appropriate sprite atlas
+        if w <= 256 && h <= 256 && params.wrap == WrapMode::Clamp {
+            let use_nearest = params.filter == FilterMode::Nearest;
+
+            // pick the right atlas based on filter mode
+            let (atlas, atlas_gl_tex, atlas_dirty, atlas_image_indices, atlas_region_map) =
+                if use_nearest {
+                    (&mut self.nearest_atlas, &mut self.nearest_atlas_gl_tex,
+                     &mut self.nearest_atlas_dirty, &mut self.nearest_atlas_image_indices,
+                     &mut self.nearest_atlas_region_map)
+                } else {
+                    (&mut self.sprite_atlas, &mut self.sprite_atlas_gl_tex,
+                     &mut self.atlas_dirty, &mut self.atlas_image_indices,
+                     &mut self.atlas_region_map)
+                };
+
+            let mut region = atlas.add_image(pixels, w, h);
+
+            if region.is_none() {
+                if let Some(new_regions) = atlas.grow() {
+                    for (&tex_id, &img_idx) in atlas_image_indices.iter() {
+                        if let Some(r) = new_regions.get(img_idx) {
+                            atlas_region_map.insert(tex_id, *r);
+                        }
+                    }
+                    if let Some(old_tex) = atlas_gl_tex.take() {
+                        let old_w = atlas.width;
+                        let old_h = atlas.height;
+                        self.gpu_ram_bytes = self.gpu_ram_bytes.saturating_sub((old_w as u64 / 2) * (old_h as u64) * 4);
+                        unsafe { self.gl.delete_texture(old_tex); }
+                    }
+                    region = atlas.add_image(pixels, w, h);
+                }
+            }
+
+            if let Some(region) = region {
+                let id = self.next_tex_id;
+                self.next_tex_id += 1;
+                let img_idx = atlas.region_count() - 1;
+                atlas_image_indices.insert(id, img_idx);
+                atlas_region_map.insert(id, region);
+                *atlas_dirty = true;
+                let placeholder_tex = unsafe {
+                    atlas_gl_tex.unwrap_or_else(|| {
+                        self.gl.create_texture().expect("placeholder")
+                    })
+                };
+                self.textures.insert(id, TextureInfo { gl_tex: placeholder_tex, width: w, height: h });
+                self.tex_map_dirty = true;
+                return Ok(TextureHandle::new(id));
+            }
+        }
+
+        // standalone texture (too large for atlas, or Repeat wrap)
+        let gl_tex = unsafe {
+            let tex = self.gl.create_texture().map_err(RendererError::Texture)?;
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            self.gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                w as i32,
+                h as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(pixels)),
+            );
+
+            let filter = match params.filter {
+                FilterMode::Nearest => glow::NEAREST as i32,
+                FilterMode::Linear => glow::LINEAR as i32,
+            };
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, filter);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, filter);
+
+            let wrap = match params.wrap {
+                WrapMode::Clamp => glow::CLAMP_TO_EDGE as i32,
+                WrapMode::Repeat => glow::REPEAT as i32,
+            };
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, wrap);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap);
+
+            self.gl.bind_texture(glow::TEXTURE_2D, None);
+            tex
+        };
+
+        let id = self.next_tex_id;
+        self.next_tex_id += 1;
+        self.textures.insert(id, TextureInfo { gl_tex, width: w, height: h });
+        self.tex_map_dirty = true;
+        self.gpu_ram_bytes += (w as u64) * (h as u64) * 4;
+        Ok(TextureHandle::new(id))
+    }
+
     // create a temp fbo + texture for blur ping-pong
     fn create_temp_fbo(&self, w: u32, h: u32) -> (glow::Framebuffer, glow::Texture) {
         unsafe {
@@ -610,7 +788,6 @@ impl GlowRenderer {
         window: &winit::window::Window,
     ) -> Result<Self, RendererError> {
         let size = window.inner_size();
-        let scale = window.scale_factor() as f32;
 
         use crate::batch::MAX_IBO_QUADS;
         const INIT_VBO_CAP: usize = 65536; // 64kb initial
@@ -866,14 +1043,11 @@ impl GlowRenderer {
             clear_color: Color::BLACK,
             w: size.width,
             h: size.height,
-            proj: screen_ortho(
-                (size.width as f32 / scale) as u32,
-                (size.height as f32 / scale) as u32,
-            ),
+            proj: screen_ortho(size.width, size.height),
             cam: {
-                let lw = size.width as f32 / scale;
-                let lh = size.height as f32 / scale;
-                Camera2D::new(lw, lh).with_position(Vec2::new(lw / 2.0, lh / 2.0))
+                let pw = size.width as f32;
+                let ph = size.height as f32;
+                Camera2D::new(pw, ph).with_position(Vec2::new(pw / 2.0, ph / 2.0))
             },
             shape_prog,
             shape_vaos,
@@ -898,7 +1072,6 @@ impl GlowRenderer {
             clip_stack: Vec::new(),
             current_clip: None,
             current_blend: BlendMode::Alpha,
-            scale_factor: scale,
             effect_grayscale_prog: fx_gray,
             effect_invert_prog: fx_inv,
             effect_brightness_prog: fx_bright,
@@ -942,6 +1115,12 @@ impl GlowRenderer {
             atlas_region_map: HashMap::new(),
             atlas_dirty: false,
             atlas_image_indices: HashMap::new(),
+            nearest_atlas: lite_render_2d_core::atlas::TextureAtlas::new(256, 256),
+            nearest_atlas_gl_tex: None,
+            nearest_atlas_tex_id: None,
+            nearest_atlas_region_map: HashMap::new(),
+            nearest_atlas_dirty: false,
+            nearest_atlas_image_indices: HashMap::new(),
             frame_start: Instant::now(),
             fps_samples: [0.0; 60],
             fps_idx: 0,
@@ -949,6 +1128,8 @@ impl GlowRenderer {
             stats_enabled: std::env::var("LITE_RENDER_STATS").map(|v| v == "1").unwrap_or(false),
             cached_gl_tex_map: HashMap::new(),
             tex_map_dirty: true,
+            user_atlases: HashMap::new(),
+            next_atlas_id: 0,
         })
     }
 }
@@ -965,12 +1146,10 @@ impl Renderer for GlowRenderer {
     fn resize(&mut self, width: u32, height: u32) {
         self.w = width;
         self.h = height;
-        // projection uses logical pixels, viewport uses physical
-        let lw = (width as f32 / self.scale_factor) as u32;
-        let lh = (height as f32 / self.scale_factor) as u32;
-        self.proj = screen_ortho(lw, lh);
-        self.cam = Camera2D::new(lw as f32, lh as f32)
-            .with_position(Vec2::new(lw as f32 / 2.0, lh as f32 / 2.0));
+        // projection and viewport both use physical pixels for crisp rendering
+        self.proj = screen_ortho(width, height);
+        self.cam = Camera2D::new(width as f32, height as f32)
+            .with_position(Vec2::new(width as f32 / 2.0, height as f32 / 2.0));
         self.surface.resize(
             &self.gl_ctx,
             NonZeroU32::new(width.max(1)).unwrap(),
@@ -982,6 +1161,8 @@ impl Renderer for GlowRenderer {
     }
 
     fn set_camera(&mut self, camera: &Camera2D) {
+        // flush any pending draws before changing projection
+        self.flush_batch();
         self.cam = *camera;
         self.proj = camera.projection_matrix();
     }
@@ -1002,8 +1183,9 @@ impl Renderer for GlowRenderer {
         self.frame_start = Instant::now();
         self.vbo_frame_idx = 1 - self.vbo_frame_idx;
         self.batcher.clear();
-        // ensure atlas is uploaded so draw_sprite can remap UVs to atlas space
+        // ensure atlases are uploaded so draw_sprite can remap UVs to atlas space
         self.upload_sprite_atlas_if_dirty();
+        self.upload_nearest_atlas_if_dirty();
         let c = self.clear_color;
         unsafe {
             self.gl.clear_color(c.r, c.g, c.b, c.a);
@@ -1023,12 +1205,12 @@ impl Renderer for GlowRenderer {
     }
 
     fn push_clip_rect(&mut self, rect: Rect) {
-        let s = self.scale_factor;
+        // coords are already in physical pixels, no scaling needed
         let new_clip = [
-            (rect.pos.x.max(0.0) * s) as u32,
-            (rect.pos.y.max(0.0) * s) as u32,
-            (rect.size.x.max(0.0) * s) as u32,
-            (rect.size.y.max(0.0) * s) as u32,
+            rect.pos.x.max(0.0) as u32,
+            rect.pos.y.max(0.0) as u32,
+            rect.size.x.max(0.0) as u32,
+            rect.size.y.max(0.0) as u32,
         ];
         // intersec with parent clip if any
         let clipped = match self.current_clip {
@@ -1443,90 +1625,24 @@ impl Renderer for GlowRenderer {
             .into_rgba8();
         let (w, h) = img.dimensions();
         let pixels = img.into_raw();
+        self.upload_rgba(&pixels, w, h, params)
+    }
 
-        // try packing small textures into sprite atlas
-        if w <= 256 && h <= 256 && params.wrap == WrapMode::Clamp {
-            let mut region = self.sprite_atlas.add_image(&pixels, w, h);
-
-            // if atlas full, try to grow and repack
-            if region.is_none() {
-                if let Some(new_regions) = self.sprite_atlas.grow() {
-                    // update all existing atlas region mappings with new positions
-                    for (&tex_id, &img_idx) in &self.atlas_image_indices {
-                        if let Some(r) = new_regions.get(img_idx) {
-                            self.atlas_region_map.insert(tex_id, *r);
-                        }
-                    }
-                    // delete old gl texture, will be recreated on next upload
-                    if let Some(old_tex) = self.sprite_atlas_gl_tex.take() {
-                        let old_w = self.sprite_atlas.width;
-                        let old_h = self.sprite_atlas.height;
-                        self.gpu_ram_bytes = self.gpu_ram_bytes.saturating_sub((old_w as u64 / 2) * (old_h as u64) * 4);
-                        unsafe { self.gl.delete_texture(old_tex); }
-                    }
-                    // retry after grow
-                    region = self.sprite_atlas.add_image(&pixels, w, h);
-                }
-            }
-
-            if let Some(region) = region {
-                let id = self.next_tex_id;
-                self.next_tex_id += 1;
-                let img_idx = self.sprite_atlas.region_count() - 1;
-                self.atlas_image_indices.insert(id, img_idx);
-                self.atlas_region_map.insert(id, region);
-                self.atlas_dirty = true;
-                // store a textureinfo with original dims so texture_size() works
-                let placeholder_tex = unsafe {
-                    self.sprite_atlas_gl_tex.unwrap_or_else(|| {
-                        self.gl.create_texture().expect("placeholder")
-                    })
-                };
-                self.textures.insert(id, TextureInfo { gl_tex: placeholder_tex, width: w, height: h });
-                self.tex_map_dirty = true;
-                return Ok(TextureHandle::new(id));
-            }
+    fn load_texture_raw(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        params: TextureParams,
+    ) -> Result<TextureHandle, RendererError> {
+        let expected = (width as usize) * (height as usize) * 4;
+        if rgba.len() != expected {
+            return Err(RendererError::Texture(format!(
+                "expected {} bytes for {}x{} RGBA8, got {}",
+                expected, width, height, rgba.len()
+            )));
         }
-
-        let gl_tex = unsafe {
-            let tex = self.gl.create_texture().map_err(RendererError::Texture)?;
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-            self.gl.tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                glow::RGBA8 as i32,
-                w as i32,
-                h as i32,
-                0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(&pixels)),
-            );
-
-            let filter = match params.filter {
-                FilterMode::Nearest => glow::NEAREST as i32,
-                FilterMode::Linear => glow::LINEAR as i32,
-            };
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, filter);
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, filter);
-
-            let wrap = match params.wrap {
-                WrapMode::Clamp => glow::CLAMP_TO_EDGE as i32,
-                WrapMode::Repeat => glow::REPEAT as i32,
-            };
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, wrap);
-            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap);
-
-            self.gl.bind_texture(glow::TEXTURE_2D, None);
-            tex
-        };
-
-        let id = self.next_tex_id;
-        self.next_tex_id += 1;
-        self.textures.insert(id, TextureInfo { gl_tex, width: w, height: h });
-        self.tex_map_dirty = true;
-        self.gpu_ram_bytes += (w as u64) * (h as u64) * 4;
-        Ok(TextureHandle::new(id))
+        self.upload_rgba(rgba, width, height, params)
     }
 
     fn texture_size(&self, handle: TextureHandle) -> Option<(u32, u32)> {
@@ -1587,6 +1703,22 @@ impl Renderer for GlowRenderer {
             } else {
                 handle.id()
             }
+        } else if let Some(region) = self.nearest_atlas_region_map.get(&handle.id()) {
+            if let Some(atlas_id) = self.nearest_atlas_tex_id {
+                let aw = self.nearest_atlas.width as f32;
+                let ah = self.nearest_atlas.height as f32;
+                let ox = region.x as f32 / aw;
+                let oy = region.y as f32 / ah;
+                let sw = region.width as f32 / aw;
+                let sh = region.height as f32 / ah;
+                uv_min_x = ox + uv_min_x * sw;
+                uv_min_y = oy + uv_min_y * sh;
+                uv_max_x = ox + uv_max_x * sw;
+                uv_max_y = oy + uv_max_y * sh;
+                atlas_id
+            } else {
+                handle.id()
+            }
         } else {
             handle.id()
         };
@@ -1597,21 +1729,29 @@ impl Renderer for GlowRenderer {
         if self.transform_stack.is_identity() {
             // frustum cull using aabb of the transformed quad
             let (cos, sin) = if t.rotation == 0.0 { (1.0_f32, 0.0_f32) } else { (t.rotation.cos(), t.rotation.sin()) };
+            let ox = params.origin.x;
+            let oy = params.origin.y;
             // compute aabb from rotated quad extents
             let abs_cos = cos.abs();
             let abs_sin = sin.abs();
             let half_w = (abs_cos * sx + abs_sin * sy) * 0.5;
             let half_h = (abs_sin * sx + abs_cos * sy) * 0.5;
-            let cx = t.pos.x + (cos * sx - sin * sy) * 0.5;
-            let cy = t.pos.y + (sin * sx + cos * sy) * 0.5;
+            let cx = t.pos.x + cos * sx * (0.5 - ox) - sin * sy * (0.5 - oy);
+            let cy = t.pos.y + sin * sx * (0.5 - ox) + cos * sy * (0.5 - oy);
             if self.is_offscreen(cx - half_w, cy - half_h, cx + half_w, cy + half_h) {
                 return;
             }
 
+            // pre-adjust position for origin (shader uses top-left origin)
+            let offset_x = cos * (ox * sx) - sin * (oy * sy);
+            let offset_y = sin * (ox * sx) + cos * (oy * sy);
+            let adj_x = t.pos.x - offset_x;
+            let adj_y = t.pos.y - offset_y;
+
             // pack 40 bytes of instance data
             let mut inst = [0u8; crate::batch::SPRITE_INST_SIZE];
-            inst[0..4].copy_from_slice(&t.pos.x.to_le_bytes());
-            inst[4..8].copy_from_slice(&t.pos.y.to_le_bytes());
+            inst[0..4].copy_from_slice(&adj_x.to_le_bytes());
+            inst[4..8].copy_from_slice(&adj_y.to_le_bytes());
             inst[8..12].copy_from_slice(&sx.to_le_bytes());
             inst[12..16].copy_from_slice(&sy.to_le_bytes());
             inst[16..20].copy_from_slice(&t.rotation.to_le_bytes());
@@ -1630,16 +1770,18 @@ impl Renderer for GlowRenderer {
 
         // fallback: quad path for non-identity transform stack
         let (cos, sin) = if t.rotation == 0.0 { (1.0_f32, 0.0_f32) } else { (t.rotation.cos(), t.rotation.sin()) };
+        let ox = params.origin.x;
+        let oy = params.origin.y;
         let transform = |px: f32, py: f32| -> (f32, f32) {
             let x = cos * sx * px + (-sin * sy) * py + t.pos.x;
             let y = sin * sx * px + cos * sy * py + t.pos.y;
             (x, y)
         };
 
-        let (x0, y0) = transform(0.0, 0.0);
-        let (x1, y1) = transform(1.0, 0.0);
-        let (x2, y2) = transform(1.0, 1.0);
-        let (x3, y3) = transform(0.0, 1.0);
+        let (x0, y0) = transform(0.0 - ox, 0.0 - oy);
+        let (x1, y1) = transform(1.0 - ox, 0.0 - oy);
+        let (x2, y2) = transform(1.0 - ox, 1.0 - oy);
+        let (x3, y3) = transform(0.0 - ox, 1.0 - oy);
 
         // bake uv corners from min/max
         let (u0, v0) = (uv_min_x, uv_min_y);
@@ -1735,7 +1877,7 @@ impl Renderer for GlowRenderer {
                 q.color.r, q.color.g, q.color.b, q.color.a,
             );
 
-            self.batcher.push_sprite(atlas_id, &verts, 0, BlendMode::Alpha, self.current_clip);
+            self.batcher.push_sprite(atlas_id, &verts, params.z, BlendMode::Alpha, self.current_clip);
         }
     }
 
@@ -1867,7 +2009,6 @@ impl Renderer for GlowRenderer {
     fn begin_render_to_texture(&mut self, target: RenderTargetHandle) -> Result<(), RendererError> {
         // flush pending draws to current target first
         self.flush_batch();
-        self.batcher.clear();
 
         let rt_id = target.id();
         let rt = self.render_targets.get(&rt_id)
@@ -1898,7 +2039,6 @@ impl Renderer for GlowRenderer {
 
         // flush draws to the fbo
         self.flush_batch();
-        self.batcher.clear();
 
         // restore default framebuffer
         unsafe {
@@ -2116,6 +2256,149 @@ impl Renderer for GlowRenderer {
         }
     }
 
+    fn create_atlas(
+        &mut self,
+        width: u32,
+        height: u32,
+        params: TextureParams,
+    ) -> Result<AtlasHandle, RendererError> {
+        let id = self.next_atlas_id;
+        self.next_atlas_id += 1;
+        self.user_atlases.insert(id, UserAtlas {
+            atlas: lite_render_2d_core::atlas::TextureAtlas::new(width, height),
+            gl_tex: None,
+            params,
+            tex_handle_id: None,
+            dirty: false,
+        });
+        Ok(AtlasHandle::new(id))
+    }
+
+    fn atlas_pack(
+        &mut self,
+        atlas: AtlasHandle,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<AtlasRegion, RendererError> {
+        let expected = (width as usize) * (height as usize) * 4;
+        if rgba.len() != expected {
+            return Err(RendererError::Texture(format!(
+                "expected {} bytes for {}x{} RGBA8, got {}",
+                expected, width, height, rgba.len()
+            )));
+        }
+        let ua = self.user_atlases.get_mut(&atlas.id())
+            .ok_or_else(|| RendererError::Other("invalid atlas handle".into()))?;
+
+        let mut region = ua.atlas.add_image(rgba, width, height);
+        if region.is_none() {
+            if ua.atlas.grow().is_some() {
+                // old gl texture is now wrong size, delete it
+                if let Some(old_tex) = ua.gl_tex.take() {
+                    unsafe { self.gl.delete_texture(old_tex); }
+                }
+                // remove old tex handle since it will be recreated
+                if let Some(old_id) = ua.tex_handle_id.take() {
+                    self.textures.remove(&old_id);
+                    self.tex_map_dirty = true;
+                }
+                region = ua.atlas.add_image(rgba, width, height);
+            }
+        }
+
+        match region {
+            Some(r) => {
+                ua.dirty = true;
+                Ok(r)
+            }
+            None => Err(RendererError::Texture("atlas full, cannot pack image".into())),
+        }
+    }
+
+    fn atlas_texture(
+        &mut self,
+        atlas: AtlasHandle,
+    ) -> Result<TextureHandle, RendererError> {
+        // check if upload is needed and gather data while borrowing user_atlases
+        let needs_upload = {
+            let ua = self.user_atlases.get(&atlas.id())
+                .ok_or_else(|| RendererError::Other("invalid atlas handle".into()))?;
+            ua.dirty || ua.gl_tex.is_none()
+        };
+
+        if needs_upload {
+            let ua = self.user_atlases.get(&atlas.id()).unwrap();
+            let aw = ua.atlas.width;
+            let ah = ua.atlas.height;
+            let (atlas_data, _, _) = ua.atlas.texture_data();
+            let params = ua.params;
+            let existing_gl_tex = ua.gl_tex;
+            let existing_handle_id = ua.tex_handle_id;
+            // copy atlas data to break the borrow
+            let data_copy = atlas_data.to_vec();
+
+            let gl_tex = if let Some(existing) = existing_gl_tex {
+                unsafe {
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(existing));
+                    self.gl.tex_image_2d(
+                        glow::TEXTURE_2D, 0, glow::RGBA8 as i32,
+                        aw as i32, ah as i32, 0,
+                        glow::RGBA, glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&data_copy)),
+                    );
+                    self.gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+                existing
+            } else {
+                unsafe {
+                    let tex = self.gl.create_texture().map_err(RendererError::Texture)?;
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                    self.gl.tex_image_2d(
+                        glow::TEXTURE_2D, 0, glow::RGBA8 as i32,
+                        aw as i32, ah as i32, 0,
+                        glow::RGBA, glow::UNSIGNED_BYTE,
+                        glow::PixelUnpackData::Slice(Some(&data_copy)),
+                    );
+                    let filter = match params.filter {
+                        FilterMode::Nearest => glow::NEAREST as i32,
+                        FilterMode::Linear => glow::LINEAR as i32,
+                    };
+                    self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, filter);
+                    self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, filter);
+                    let wrap = match params.wrap {
+                        WrapMode::Clamp => glow::CLAMP_TO_EDGE as i32,
+                        WrapMode::Repeat => glow::REPEAT as i32,
+                    };
+                    self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, wrap);
+                    self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap);
+                    self.gl.bind_texture(glow::TEXTURE_2D, None);
+                    tex
+                }
+            };
+
+            let tex_id = existing_handle_id.unwrap_or_else(|| {
+                let id = self.next_tex_id;
+                self.next_tex_id += 1;
+                id
+            });
+
+            // update the atlas entry
+            let ua = self.user_atlases.get_mut(&atlas.id()).unwrap();
+            ua.gl_tex = Some(gl_tex);
+            ua.dirty = false;
+            ua.tex_handle_id = Some(tex_id);
+
+            self.textures.insert(tex_id, TextureInfo { gl_tex, width: aw, height: ah });
+            self.tex_map_dirty = true;
+        }
+
+        let tex_id = self.user_atlases.get(&atlas.id())
+            .and_then(|ua| ua.tex_handle_id)
+            .ok_or_else(|| RendererError::Other("atlas has no texture".into()))?;
+        Ok(TextureHandle::new(tex_id))
+    }
+
     fn draw_sprite_instanced(
         &mut self,
         handle: TextureHandle,
@@ -2139,6 +2422,7 @@ impl Renderer for GlowRenderer {
                     flip_y: inst.flip_y,
                     blend,
                     z_index: _z_index,
+                    origin: inst.origin,
                 });
             }
             return;
@@ -2158,6 +2442,15 @@ impl Renderer for GlowRenderer {
             if let Some(atlas_id) = self.sprite_atlas_tex_id {
                 let aw = self.sprite_atlas.width as f32;
                 let ah = self.sprite_atlas.height as f32;
+                (atlas_id, Some((region.x as f32 / aw, region.y as f32 / ah,
+                                 region.width as f32 / aw, region.height as f32 / ah)))
+            } else {
+                (handle.id(), None)
+            }
+        } else if let Some(region) = self.nearest_atlas_region_map.get(&handle.id()) {
+            if let Some(atlas_id) = self.nearest_atlas_tex_id {
+                let aw = self.nearest_atlas.width as f32;
+                let ah = self.nearest_atlas.height as f32;
                 (atlas_id, Some((region.x as f32 / aw, region.y as f32 / ah,
                                  region.width as f32 / aw, region.height as f32 / ah)))
             } else {
@@ -2212,9 +2505,19 @@ impl Renderer for GlowRenderer {
 
             let a = inst.tint.a * inst.opacity;
 
+            // pre-adjust position for origin (shader uses top-left origin)
+            let (adj_x, adj_y) = if inst.origin.x != 0.0 || inst.origin.y != 0.0 {
+                let (cos, sin) = if t.rotation == 0.0 { (1.0_f32, 0.0_f32) } else { (t.rotation.cos(), t.rotation.sin()) };
+                let off_x = cos * (inst.origin.x * sx) - sin * (inst.origin.y * sy);
+                let off_y = sin * (inst.origin.x * sx) + cos * (inst.origin.y * sy);
+                (t.pos.x - off_x, t.pos.y - off_y)
+            } else {
+                (t.pos.x, t.pos.y)
+            };
+
             // pack 40 bytes: pos(8) + scale(8) + rot(4) + uv_min(8) + uv_max(8) + tint(4)
-            data.extend_from_slice(&t.pos.x.to_le_bytes());
-            data.extend_from_slice(&t.pos.y.to_le_bytes());
+            data.extend_from_slice(&adj_x.to_le_bytes());
+            data.extend_from_slice(&adj_y.to_le_bytes());
             data.extend_from_slice(&sx.to_le_bytes());
             data.extend_from_slice(&sy.to_le_bytes());
             data.extend_from_slice(&t.rotation.to_le_bytes());
