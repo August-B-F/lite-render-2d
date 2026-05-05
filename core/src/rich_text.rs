@@ -1,5 +1,5 @@
 use crate::font_atlas::{FontSystem, GlyphQuad};
-use crate::text::{FontHandle, TextAlign};
+use crate::text::{FontHandle, GlyphPosition, TextAlign, TextLayout};
 use crate::types::{Color, Vec2};
 
 pub struct RichTextSpan {
@@ -9,6 +9,9 @@ pub struct RichTextSpan {
     pub color: Color,
     pub bold: bool,
     pub italic: bool,
+    pub letter_spacing: Option<f32>,
+    pub underline: bool,
+    pub strikethrough: bool,
 }
 
 pub struct RichText {
@@ -25,6 +28,7 @@ struct StyledChar {
     font_id: u64,
     size: f32,
     color: Color,
+    letter_spacing: f32,
 }
 
 // layout rich text into glyph quads using the font system
@@ -37,12 +41,14 @@ pub fn layout_rich_text(rich: &RichText, font_sys: &mut FontSystem) -> Vec<Glyph
     let mut chars: Vec<StyledChar> = Vec::new();
     for span in &rich.spans {
         let fid = span.font.id();
+        let ls = span.letter_spacing.unwrap_or(0.0);
         for ch in span.text.chars() {
             chars.push(StyledChar {
                 ch,
                 font_id: fid,
                 size: span.size,
                 color: span.color,
+                letter_spacing: ls,
             });
         }
     }
@@ -80,12 +86,10 @@ pub fn layout_rich_text(rich: &RichText, font_sys: &mut FontSystem) -> Vec<Glyph
             continue;
         }
 
-        let adv = font_sys.glyph_advance(sc.font_id, sc.ch, sc.size);
+        let adv = font_sys.glyph_advance(sc.font_id, sc.ch, sc.size) + sc.letter_spacing;
 
         if sc.ch == ' ' {
-            // flush word
             if in_word {
-                // check if word fits
                 if cur_line_w + word_w > max_w && cur_line_w > 0.0 {
                     lines.push(vec![]);
                     cur_line_w = 0.0;
@@ -95,7 +99,6 @@ pub fn layout_rich_text(rich: &RichText, font_sys: &mut FontSystem) -> Vec<Glyph
                 word_w = 0.0;
                 in_word = false;
             }
-            // add space
             lines.last_mut().unwrap().push(i);
             cur_line_w += adv;
         } else {
@@ -105,6 +108,17 @@ pub fn layout_rich_text(rich: &RichText, font_sys: &mut FontSystem) -> Vec<Glyph
                 in_word = true;
             }
             word_w += adv;
+            if word_w > max_w && i > word_start {
+                if cur_line_w > 0.0 {
+                    lines.push(vec![]);
+                    cur_line_w = 0.0;
+                }
+                lines.last_mut().unwrap().extend(word_start..i);
+                lines.push(vec![]);
+                cur_line_w = 0.0;
+                word_start = i;
+                word_w = adv;
+            }
         }
     }
 
@@ -116,14 +130,34 @@ pub fn layout_rich_text(rich: &RichText, font_sys: &mut FontSystem) -> Vec<Glyph
         lines.last_mut().unwrap().extend(word_start..chars.len());
     }
 
+    let mut line_heights: Vec<f32> = Vec::with_capacity(lines.len());
+    for line_indices in &lines {
+        if line_indices.is_empty() {
+            line_heights.push(default_lh);
+        } else {
+            let max_size = line_indices.iter().map(|&i| chars[i].size).fold(0.0f32, f32::max);
+            if max_size < 1.0 {
+                line_heights.push(max_size * 1.5);
+            } else {
+                line_heights.push(default_lh.max(max_size * 1.5));
+            }
+        }
+    }
+
+    let mut line_y_offsets: Vec<f32> = Vec::with_capacity(lines.len());
+    let mut y_acc = 0.0f32;
+    for &lh in &line_heights {
+        line_y_offsets.push(y_acc);
+        y_acc += lh;
+    }
+
     // emit quads per line with alignment
     let mut quads = Vec::with_capacity(chars.len());
 
     for (li, line_indices) in lines.iter().enumerate() {
-        // measure line width
         let line_w: f32 = line_indices.iter().map(|&i| {
             let sc = &chars[i];
-            font_sys.glyph_advance(sc.font_id, sc.ch, sc.size)
+            font_sys.glyph_advance(sc.font_id, sc.ch, sc.size) + sc.letter_spacing
         }).sum();
 
         let align_w = if max_w < f32::MAX { max_w } else { 0.0 };
@@ -134,14 +168,14 @@ pub fn layout_rich_text(rich: &RichText, font_sys: &mut FontSystem) -> Vec<Glyph
         };
 
         let mut cx = rich.position.x + x_off;
-        let by = rich.position.y + li as f32 * default_lh;
+        let by = rich.position.y + line_y_offsets[li];
 
         for &idx in line_indices {
             let sc = &chars[idx];
             if let Some(q) = font_sys.glyph_quad(sc.font_id, sc.ch, sc.size, cx, by, sc.color) {
                 quads.push(q);
             }
-            cx += font_sys.glyph_advance(sc.font_id, sc.ch, sc.size);
+            cx += font_sys.glyph_advance(sc.font_id, sc.ch, sc.size) + sc.letter_spacing;
         }
     }
 
@@ -170,6 +204,177 @@ pub fn measure_rich_text(rich: &RichText, font_sys: &mut FontSystem) -> Vec2 {
     Vec2::new(max_x - min_x, max_y - min_y)
 }
 
+pub fn compute_rich_text_layout(rich: &RichText, font_sys: &mut FontSystem) -> TextLayout {
+    if rich.spans.is_empty() {
+        return TextLayout { glyphs: vec![], size: Vec2::ZERO, line_count: 0, line_offsets: vec![] };
+    }
+
+    let mut chars: Vec<StyledChar> = Vec::new();
+    let mut byte_offsets: Vec<usize> = Vec::new();
+    let mut char_indices: Vec<usize> = Vec::new();
+
+    let mut byte_cursor = 0usize;
+    let mut char_cursor = 0usize;
+    for span in &rich.spans {
+        let fid = span.font.id();
+        let ls = span.letter_spacing.unwrap_or(0.0);
+        for ch in span.text.chars() {
+            byte_offsets.push(byte_cursor);
+            char_indices.push(char_cursor);
+            chars.push(StyledChar {
+                ch,
+                font_id: fid,
+                size: span.size,
+                color: span.color,
+                letter_spacing: ls,
+            });
+            byte_cursor += ch.len_utf8();
+            char_cursor += 1;
+        }
+    }
+
+    if chars.is_empty() {
+        return TextLayout { glyphs: vec![], size: Vec2::ZERO, line_count: 0, line_offsets: vec![] };
+    }
+
+    for sc in &chars {
+        font_sys.ensure_glyph_pub(sc.font_id, sc.ch, sc.size);
+    }
+
+    let default_lh = rich.line_height.unwrap_or(rich.spans[0].size);
+    let max_w = rich.max_width.unwrap_or(f32::MAX);
+
+    let mut lines: Vec<Vec<usize>> = vec![vec![]];
+    let mut cur_line_w = 0.0f32;
+    let mut word_start = 0usize;
+    let mut word_w = 0.0f32;
+    let mut in_word = false;
+
+    for (i, sc) in chars.iter().enumerate() {
+        if sc.ch == '\n' {
+            if in_word {
+                lines.last_mut().unwrap().extend(word_start..i);
+                in_word = false;
+            }
+            lines.push(vec![]);
+            cur_line_w = 0.0;
+            word_w = 0.0;
+            continue;
+        }
+
+        let adv = font_sys.glyph_advance(sc.font_id, sc.ch, sc.size) + sc.letter_spacing;
+
+        if sc.ch == ' ' {
+            if in_word {
+                if cur_line_w + word_w > max_w && cur_line_w > 0.0 {
+                    lines.push(vec![]);
+                    cur_line_w = 0.0;
+                }
+                lines.last_mut().unwrap().extend(word_start..i);
+                cur_line_w += word_w;
+                word_w = 0.0;
+                in_word = false;
+            }
+            lines.last_mut().unwrap().push(i);
+            cur_line_w += adv;
+        } else {
+            if !in_word {
+                word_start = i;
+                word_w = 0.0;
+                in_word = true;
+            }
+            word_w += adv;
+            if word_w > max_w && i > word_start {
+                if cur_line_w > 0.0 {
+                    lines.push(vec![]);
+                    cur_line_w = 0.0;
+                }
+                lines.last_mut().unwrap().extend(word_start..i);
+                lines.push(vec![]);
+                cur_line_w = 0.0;
+                word_start = i;
+                word_w = adv;
+            }
+        }
+    }
+
+    if in_word {
+        if cur_line_w + word_w > max_w && cur_line_w > 0.0 {
+            lines.push(vec![]);
+        }
+        lines.last_mut().unwrap().extend(word_start..chars.len());
+    }
+
+    let mut line_heights: Vec<f32> = Vec::with_capacity(lines.len());
+    for line_indices in &lines {
+        if line_indices.is_empty() {
+            line_heights.push(default_lh);
+        } else {
+            let max_size = line_indices.iter().map(|&i| chars[i].size).fold(0.0f32, f32::max);
+            if max_size < 1.0 {
+                line_heights.push(max_size * 1.5);
+            } else {
+                line_heights.push(default_lh.max(max_size * 1.5));
+            }
+        }
+    }
+
+    let mut line_y_offsets: Vec<f32> = Vec::with_capacity(lines.len());
+    let mut y_acc = 0.0f32;
+    for &lh in &line_heights {
+        line_y_offsets.push(y_acc);
+        y_acc += lh;
+    }
+
+    let mut glyphs = Vec::with_capacity(chars.len());
+    let mut line_offsets_vec = Vec::with_capacity(lines.len());
+    let mut total_max_w = 0.0f32;
+
+    for (li, line_indices) in lines.iter().enumerate() {
+        let line_y = rich.position.y + line_y_offsets[li];
+        line_offsets_vec.push(line_y);
+
+        let line_w: f32 = line_indices.iter().map(|&i| {
+            let sc = &chars[i];
+            font_sys.glyph_advance(sc.font_id, sc.ch, sc.size) + sc.letter_spacing
+        }).sum();
+        if line_w > total_max_w { total_max_w = line_w; }
+
+        let align_w = if max_w < f32::MAX { max_w } else { 0.0 };
+        let x_off = match rich.align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => if align_w > 0.0 { (align_w - line_w) * 0.5 } else { -line_w * 0.5 },
+            TextAlign::Right => if align_w > 0.0 { align_w - line_w } else { -line_w },
+        };
+
+        let mut cx = rich.position.x + x_off;
+
+        for &idx in line_indices {
+            let sc = &chars[idx];
+            let adv = font_sys.glyph_advance(sc.font_id, sc.ch, sc.size) + sc.letter_spacing;
+
+            glyphs.push(GlyphPosition {
+                byte_offset: byte_offsets[idx],
+                char_index: char_indices[idx],
+                line: li,
+                x: cx,
+                y: line_y,
+                advance: adv,
+                line_height: line_heights[li],
+            });
+
+            cx += adv;
+        }
+    }
+
+    TextLayout {
+        glyphs,
+        size: Vec2::new(total_max_w, y_acc),
+        line_count: lines.len(),
+        line_offsets: line_offsets_vec,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +398,9 @@ mod tests {
                 color: Color::WHITE,
                 bold: false,
                 italic: false,
+                letter_spacing: None,
+                underline: false,
+                strikethrough: false,
             }],
             align: TextAlign::Left,
             max_width: None,
@@ -214,6 +422,9 @@ mod tests {
                 color: Color::WHITE,
                 bold: false,
                 italic: false,
+                letter_spacing: None,
+                underline: false,
+                strikethrough: false,
             }],
             align: TextAlign::Left,
             max_width: None,
@@ -236,6 +447,9 @@ mod tests {
                     color: Color::RED,
                     bold: false,
                     italic: false,
+                    letter_spacing: None,
+                    underline: false,
+                    strikethrough: false,
                 },
                 RichTextSpan {
                     text: "B".to_string(),
@@ -244,6 +458,9 @@ mod tests {
                     color: Color::BLUE,
                     bold: false,
                     italic: false,
+                    letter_spacing: None,
+                    underline: false,
+                    strikethrough: false,
                 },
             ],
             align: TextAlign::Left,
@@ -274,6 +491,9 @@ mod tests {
                 color: Color::WHITE,
                 bold: false,
                 italic: false,
+                letter_spacing: None,
+                underline: false,
+                strikethrough: false,
             }],
             align: TextAlign::Left,
             max_width: None,
@@ -299,6 +519,9 @@ mod tests {
                 color: Color::WHITE,
                 bold: false,
                 italic: false,
+                letter_spacing: None,
+                underline: false,
+                strikethrough: false,
             }],
             align: TextAlign::Left,
             max_width: None,

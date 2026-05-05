@@ -1,10 +1,11 @@
-use crate::text::{FontHandle, TextAlign, TextParams};
+use crate::text::{FontHandle, GlyphPosition, TextAlign, TextLayout, TextParams};
 use crate::types::{Rect, Vec2};
 use crate::font_atlas::GlyphQuad;
 
 use std::collections::HashMap;
 
 const SDF_ATLAS_SIZE: u32 = 512;
+const MAX_ATLAS_SIZE: u32 = 4096;
 const BASE_RENDER_SIZE: f32 = 64.0;
 const SDF_SPREAD: f32 = 6.0;
 
@@ -114,7 +115,17 @@ impl SdfFontSystem {
         }
 
         if self.shelf_y + gh + pad > self.atlas_h {
-            return; // atlas full
+            if !self.grow_atlas() {
+                return;
+            }
+            if self.shelf_x + gw + pad > self.atlas_w {
+                self.shelf_y += self.shelf_row_h + pad;
+                self.shelf_x = 0;
+                self.shelf_row_h = 0;
+            }
+            if self.shelf_y + gh + pad > self.atlas_h {
+                return;
+            }
         }
 
         let ax = self.shelf_x;
@@ -166,6 +177,43 @@ impl SdfFontSystem {
         });
     }
 
+    fn grow_atlas(&mut self) -> bool {
+        let new_w = (self.atlas_w * 2).min(MAX_ATLAS_SIZE);
+        let new_h = (self.atlas_h * 2).min(MAX_ATLAS_SIZE);
+        if new_w == self.atlas_w && new_h == self.atlas_h {
+            return false;
+        }
+
+        let old_w = self.atlas_w;
+        let old_h = self.atlas_h;
+        let mut new_data = vec![0u8; (new_w * new_h * 4) as usize];
+
+        for row in 0..old_h {
+            let src_start = (row * old_w * 4) as usize;
+            let src_end = src_start + (old_w * 4) as usize;
+            let dst_start = (row * new_w * 4) as usize;
+            new_data[dst_start..dst_start + (old_w * 4) as usize]
+                .copy_from_slice(&self.atlas_data[src_start..src_end]);
+        }
+
+        let nw = new_w as f32;
+        let nh = new_h as f32;
+        let ow = old_w as f32;
+        let oh = old_h as f32;
+        for info in self.glyph_cache.values_mut() {
+            info.uv.pos.x = info.uv.pos.x * ow / nw;
+            info.uv.pos.y = info.uv.pos.y * oh / nh;
+            info.uv.size.x = info.uv.size.x * ow / nw;
+            info.uv.size.y = info.uv.size.y * oh / nh;
+        }
+
+        self.atlas_data = new_data;
+        self.atlas_w = new_w;
+        self.atlas_h = new_h;
+        self.dirty_rect = Some((0, 0, new_w, new_h));
+        true
+    }
+
     pub fn layout_text(&mut self, text: &str, params: &TextParams) -> Vec<GlyphQuad> {
         let font_id = params.font.id();
         if !self.fonts.contains_key(&font_id) {
@@ -177,6 +225,7 @@ impl SdfFontSystem {
         }
 
         let scale = params.size;
+        let ls = params.letter_spacing.unwrap_or(0.0);
         let line_h = params.line_height.unwrap_or(scale);
 
         let lines: Vec<&str> = text.split('\n').collect();
@@ -185,7 +234,7 @@ impl SdfFontSystem {
         for (li, line) in lines.iter().enumerate() {
             let line_w: f32 = line.chars().map(|ch| {
                 let key = SdfGlyphKey { font_id, ch };
-                self.glyph_cache.get(&key).map(|g| g.advance_norm).unwrap_or(0.0) * scale
+                self.glyph_cache.get(&key).map(|g| g.advance_norm).unwrap_or(0.0) * scale + ls
             }).sum();
 
             let max_w = params.max_width.unwrap_or(0.0);
@@ -196,7 +245,6 @@ impl SdfFontSystem {
             };
 
             let mut cx = params.position.x + x_off;
-            // position.y is the top of the text line, shift baseline down by font size
             let by = params.position.y + scale + li as f32 * line_h;
 
             for ch in line.chars() {
@@ -212,7 +260,7 @@ impl SdfFontSystem {
                             color: params.color,
                         });
                     }
-                    cx += info.advance_norm * scale;
+                    cx += info.advance_norm * scale + ls;
                 }
             }
         }
@@ -231,6 +279,7 @@ impl SdfFontSystem {
         }
 
         let scale = params.size;
+        let ls = params.letter_spacing.unwrap_or(0.0);
         let line_h = params.line_height.unwrap_or(scale);
         let lines: Vec<&str> = text.split('\n').collect();
 
@@ -238,12 +287,87 @@ impl SdfFontSystem {
         for line in &lines {
             let w: f32 = line.chars().map(|ch| {
                 let key = SdfGlyphKey { font_id, ch };
-                self.glyph_cache.get(&key).map(|g| g.advance_norm).unwrap_or(0.0) * scale
+                self.glyph_cache.get(&key).map(|g| g.advance_norm).unwrap_or(0.0) * scale + ls
             }).sum();
             if w > max_w { max_w = w; }
         }
 
         Vec2::new(max_w, lines.len() as f32 * line_h)
+    }
+
+    pub fn compute_text_layout(&mut self, text: &str, params: &TextParams) -> TextLayout {
+        let font_id = params.font.id();
+        if !self.fonts.contains_key(&font_id) {
+            return TextLayout { glyphs: vec![], size: Vec2::ZERO, line_count: 0, line_offsets: vec![] };
+        }
+
+        for ch in text.chars() {
+            self.ensure_glyph(font_id, ch);
+        }
+
+        let scale = params.size;
+        let ls = params.letter_spacing.unwrap_or(0.0);
+        let line_h = params.line_height.unwrap_or(scale);
+        // SDF text currently only splits on \n (no word wrap)
+        let lines: Vec<&str> = text.split('\n').collect();
+        let max_w_param = params.max_width.unwrap_or(0.0);
+
+        let mut glyphs = Vec::with_capacity(text.len());
+        let mut line_offsets = Vec::with_capacity(lines.len());
+        let mut max_w = 0.0f32;
+        let mut byte_cursor = 0usize;
+        let mut char_cursor = 0usize;
+
+        for (li, line) in lines.iter().enumerate() {
+            let line_y = params.position.y + li as f32 * line_h;
+            line_offsets.push(line_y);
+
+            let line_w: f32 = line.chars().map(|ch| {
+                let key = SdfGlyphKey { font_id, ch };
+                self.glyph_cache.get(&key).map(|g| g.advance_norm).unwrap_or(0.0) * scale + ls
+            }).sum();
+            if line_w > max_w { max_w = line_w; }
+
+            let x_off = match params.align {
+                TextAlign::Left => 0.0,
+                TextAlign::Center => if max_w_param > 0.0 { (max_w_param - line_w) * 0.5 } else { -line_w * 0.5 },
+                TextAlign::Right => if max_w_param > 0.0 { max_w_param - line_w } else { -line_w },
+            };
+
+            let mut cx = params.position.x + x_off;
+
+            for ch in line.chars() {
+                let key = SdfGlyphKey { font_id, ch };
+                let adv = self.glyph_cache.get(&key).map(|g| g.advance_norm).unwrap_or(0.0) * scale + ls;
+
+                glyphs.push(GlyphPosition {
+                    byte_offset: byte_cursor,
+                    char_index: char_cursor,
+                    line: li,
+                    x: cx,
+                    y: line_y,
+                    advance: adv,
+                    line_height: line_h,
+                });
+
+                cx += adv;
+                byte_cursor += ch.len_utf8();
+                char_cursor += 1;
+            }
+
+            // skip the \n delimiter
+            if li < lines.len() - 1 {
+                byte_cursor += 1; // \n is always 1 byte
+                char_cursor += 1;
+            }
+        }
+
+        TextLayout {
+            glyphs,
+            size: Vec2::new(max_w, lines.len() as f32 * line_h),
+            line_count: lines.len(),
+            line_offsets,
+        }
     }
 
     pub fn atlas_texture_data(&self) -> (&[u8], u32, u32) {

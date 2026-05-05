@@ -1584,10 +1584,54 @@ impl Renderer for WgpuRenderer {
 
             self.batcher.push_sprite(atlas_id, &verts, params.z, BlendMode::Alpha, self.current_clip);
         }
+
+        if params.underline || params.strikethrough {
+            let layout = self.font_system.compute_text_layout(text, params);
+            let mut line_spans: Vec<(f32, f32, f32)> = Vec::new();
+            for gp in &layout.glyphs {
+                let li = gp.line;
+                if li >= line_spans.len() {
+                    line_spans.resize(li + 1, (f32::MAX, f32::MIN, 0.0));
+                }
+                let entry = &mut line_spans[li];
+                entry.0 = entry.0.min(gp.x);
+                entry.1 = entry.1.max(gp.x + gp.advance);
+                entry.2 = gp.y;
+            }
+            let line_h = params.line_height.unwrap_or(params.size);
+            for (x_start, x_end, y) in &line_spans {
+                if params.underline {
+                    let ul_y = y + params.size;
+                    self.draw_rect(
+                        Rect { pos: Vec2::new(*x_start, ul_y), size: Vec2::new(x_end - x_start, 1.0) },
+                        DrawParams::fill(params.color).with_z(params.z),
+                    );
+                }
+                if params.strikethrough {
+                    let st_y = y + line_h * 0.4;
+                    self.draw_rect(
+                        Rect { pos: Vec2::new(*x_start, st_y), size: Vec2::new(x_end - x_start, 1.0) },
+                        DrawParams::fill(params.color).with_z(params.z),
+                    );
+                }
+            }
+        }
     }
 
     fn measure_text(&mut self, text: &str, params: &TextParams) -> Vec2 {
         self.font_system.measure_text(text, params)
+    }
+
+    fn layout_text(&mut self, text: &str, params: &TextParams) -> lite_render_2d_core::text::TextLayout {
+        self.font_system.compute_text_layout(text, params)
+    }
+
+    fn layout_rich_text(&mut self, rich: &lite_render_2d_core::rich_text::RichText) -> lite_render_2d_core::text::TextLayout {
+        lite_render_2d_core::rich_text::compute_rich_text_layout(rich, &mut self.font_system)
+    }
+
+    fn font_ascent(&self, font: lite_render_2d_core::text::FontHandle, size: f32) -> f32 {
+        self.font_system.font_ascent(font.id(), size)
     }
 
     fn end_frame(&mut self) -> Result<FrameStats, RendererError> {
@@ -1969,6 +2013,38 @@ impl Renderer for WgpuRenderer {
 
             self.batcher.push_sdf_sprite(atlas_id, &verts, 0, BlendMode::Alpha, self.current_clip);
         }
+
+        if params.underline || params.strikethrough {
+            let layout = self.sdf_font_system.compute_text_layout(text, params);
+            let mut line_spans: Vec<(f32, f32, f32)> = Vec::new();
+            for gp in &layout.glyphs {
+                let li = gp.line;
+                if li >= line_spans.len() {
+                    line_spans.resize(li + 1, (f32::MAX, f32::MIN, 0.0));
+                }
+                let entry = &mut line_spans[li];
+                entry.0 = entry.0.min(gp.x);
+                entry.1 = entry.1.max(gp.x + gp.advance);
+                entry.2 = gp.y;
+            }
+            let line_h = params.line_height.unwrap_or(params.size);
+            for (x_start, x_end, y) in &line_spans {
+                if params.underline {
+                    let ul_y = y + params.size;
+                    self.draw_rect(
+                        Rect { pos: Vec2::new(*x_start, ul_y), size: Vec2::new(x_end - x_start, 1.0) },
+                        DrawParams::fill(params.color).with_z(params.z),
+                    );
+                }
+                if params.strikethrough {
+                    let st_y = y + line_h * 0.4;
+                    self.draw_rect(
+                        Rect { pos: Vec2::new(*x_start, st_y), size: Vec2::new(x_end - x_start, 1.0) },
+                        DrawParams::fill(params.color).with_z(params.z),
+                    );
+                }
+            }
+        }
     }
 
     fn measure_sdf_text(&mut self, text: &str, params: &TextParams) -> Vec2 {
@@ -2066,6 +2142,60 @@ impl Renderer for WgpuRenderer {
             ];
 
             self.batcher.push_sprite(atlas_id, &verts, 0, BlendMode::Alpha, self.current_clip);
+        }
+
+        let has_decorations = rich.spans.iter().any(|s| s.underline || s.strikethrough);
+        if has_decorations {
+            let layout = lite_render_2d_core::rich_text::compute_rich_text_layout(rich, &mut self.font_system);
+            let default_lh = rich.line_height.unwrap_or_else(|| rich.spans.first().map(|s| s.size).unwrap_or(16.0));
+
+            let mut char_span: Vec<(Color, f32, bool, bool)> = Vec::new();
+            for span in &rich.spans {
+                for _ in span.text.chars() {
+                    char_span.push((span.color, span.size, span.underline, span.strikethrough));
+                }
+            }
+
+            let mut i = 0;
+            while i < layout.glyphs.len() {
+                let gp = &layout.glyphs[i];
+                let ci = gp.char_index;
+                if ci >= char_span.len() { i += 1; continue; }
+                let (color, size, ul, st) = char_span[ci];
+                if !ul && !st { i += 1; continue; }
+
+                let line = gp.line;
+                let x_start = gp.x;
+                let mut x_end = gp.x + gp.advance;
+                let y = gp.y;
+                let mut j = i + 1;
+                while j < layout.glyphs.len() {
+                    let gp2 = &layout.glyphs[j];
+                    if gp2.line != line { break; }
+                    let ci2 = gp2.char_index;
+                    if ci2 >= char_span.len() { break; }
+                    let (_, _, ul2, st2) = char_span[ci2];
+                    if ul2 != ul || st2 != st { break; }
+                    x_end = gp2.x + gp2.advance;
+                    j += 1;
+                }
+
+                if ul {
+                    let ul_y = y + size;
+                    self.draw_rect(
+                        Rect { pos: Vec2::new(x_start, ul_y), size: Vec2::new(x_end - x_start, 1.0) },
+                        DrawParams::fill(color),
+                    );
+                }
+                if st {
+                    let st_y = y + default_lh * 0.4;
+                    self.draw_rect(
+                        Rect { pos: Vec2::new(x_start, st_y), size: Vec2::new(x_end - x_start, 1.0) },
+                        DrawParams::fill(color),
+                    );
+                }
+                i = j;
+            }
         }
     }
 

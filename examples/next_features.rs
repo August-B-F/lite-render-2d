@@ -288,6 +288,9 @@ impl ApplicationHandler for App {
                             max_width: None,
                             line_height: None,
                             z: 0,
+                            letter_spacing: None,
+                            underline: false,
+                            strikethrough: false,
                         };
 
                         // measure text to get bounding box

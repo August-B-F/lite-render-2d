@@ -708,6 +708,7 @@ impl ApplicationHandler for App {
                         font: h, size: 24.0, color: Color::WHITE,
                         align: TextAlign::Left, position: Vec2::new(10.0, 10.0),
                         max_width: None, line_height: None, z: 0,
+                        letter_spacing: None, underline: false, strikethrough: false,
                     });
                     ren.end_frame()?;
                     ren.unload_font(h);
@@ -722,6 +723,7 @@ impl ApplicationHandler for App {
                         font: h, size: 24.0, color: Color::WHITE,
                         align: TextAlign::Left, position: Vec2::ZERO,
                         max_width: None, line_height: None, z: 0,
+                        letter_spacing: None, underline: false, strikethrough: false,
                     });
                     assert!(size.y > 0.0, "measured height should be positive");
                     ren.unload_font(h);
@@ -738,6 +740,7 @@ impl ApplicationHandler for App {
                         font: h, size: 24.0, color: Color::WHITE,
                         align: TextAlign::Left, position: Vec2::ZERO,
                         max_width: None, line_height: None, z: 0,
+                        letter_spacing: None, underline: false, strikethrough: false,
                     });
                     ren.end_frame()?;
                     Ok::<(), Box<dyn std::error::Error>>(())

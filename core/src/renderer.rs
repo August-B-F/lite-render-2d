@@ -1,6 +1,6 @@
 use crate::camera::Camera2D;
 use crate::post_process::PostEffect;
-use crate::text::{FontHandle, TextParams};
+use crate::text::{FontHandle, TextLayout, TextParams};
 use crate::atlas::AtlasRegion;
 use crate::texture::{AtlasHandle, RenderTargetHandle, TextureHandle, TextureParams};
 use crate::tilemap::Tilemap;
@@ -200,6 +200,24 @@ pub trait Renderer {
 
     /// measure text bounds without drawing
     fn measure_text(&mut self, text: &str, params: &TextParams) -> Vec2;
+
+    /// compute per-character layout positions without drawing
+    #[cfg(feature = "text")]
+    fn layout_text(&mut self, _text: &str, _params: &TextParams) -> TextLayout {
+        TextLayout { glyphs: vec![], size: Vec2::ZERO, line_count: 0, line_offsets: vec![] }
+    }
+
+    /// compute per-character layout positions for rich text without drawing
+    #[cfg(feature = "text")]
+    fn layout_rich_text(&mut self, _rich: &crate::rich_text::RichText) -> TextLayout {
+        TextLayout { glyphs: vec![], size: Vec2::ZERO, line_count: 0, line_offsets: vec![] }
+    }
+
+    /// return the font ascent (distance from baseline to top of tallest glyph) for a given font and size
+    #[cfg(feature = "text")]
+    fn font_ascent(&self, _font: FontHandle, size: f32) -> f32 {
+        size * 0.8
+    }
 
     /// finish the frame and present, returns per-frame perf stats
     fn end_frame(&mut self) -> Result<FrameStats, RendererError>;

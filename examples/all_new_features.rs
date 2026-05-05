@@ -73,6 +73,9 @@ fn draw_label(ren: &mut Renderer2D, font: FontHandle, text: &str, x: f32, y: f32
         max_width: None,
         line_height: None,
         z: 0,
+        letter_spacing: None,
+        underline: false,
+        strikethrough: false,
     });
 }
 
@@ -166,6 +169,9 @@ impl ApplicationHandler for App {
                     max_width: Some(340.0),
                     line_height: Some(22.0),
                     z: 0,
+                    letter_spacing: None,
+                    underline: false,
+                    strikethrough: false,
                 };
                 ren.draw_text("this text wraps automatically when it exceeds the max_width. word boundaries are respected, and newlines\nwork too!", &wrapped);
 
@@ -179,6 +185,9 @@ impl ApplicationHandler for App {
                     max_width: Some(340.0),
                     line_height: Some(20.0),
                     z: 0,
+                    letter_spacing: None,
+                    underline: false,
+                    strikethrough: false,
                 };
                 ren.draw_text("center-aligned multi-line text within max_width", &centered);
 

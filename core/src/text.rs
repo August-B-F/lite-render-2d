@@ -23,6 +23,27 @@ pub enum TextAlign {
     Right,
 }
 
+/// position information for a single character in laid-out text
+#[derive(Clone, Debug)]
+pub struct GlyphPosition {
+    pub byte_offset: usize,
+    pub char_index: usize,
+    pub line: usize,
+    pub x: f32,
+    pub y: f32,
+    pub advance: f32,
+    pub line_height: f32,
+}
+
+/// result of text layout including per-character positions
+#[derive(Clone, Debug)]
+pub struct TextLayout {
+    pub glyphs: Vec<GlyphPosition>,
+    pub size: Vec2,
+    pub line_count: usize,
+    pub line_offsets: Vec<f32>,
+}
+
 /// parameters for drawing text
 #[derive(Clone, Debug)]
 pub struct TextParams {
@@ -37,4 +58,8 @@ pub struct TextParams {
     pub line_height: Option<f32>,
     /// z-index for draw ordering (default 0)
     pub z: i32,
+    /// extra spacing added to each character's advance (pixels). Negative to tighten.
+    pub letter_spacing: Option<f32>,
+    pub underline: bool,
+    pub strikethrough: bool,
 }

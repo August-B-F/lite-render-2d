@@ -77,7 +77,7 @@ pub use camera::Camera2D;
 pub use collision::{circle_contains, circle_intersects_rect, line_intersects_line, point_in_polygon};
 pub use renderer::{Renderer, RendererError};
 pub use sprite_sheet::{PlaybackMode, SpriteAnimation, SpriteSheet};
-pub use text::{FontHandle, TextAlign, TextParams};
+pub use text::{FontHandle, GlyphPosition, TextAlign, TextLayout, TextParams};
 pub use texture::{AtlasHandle, RenderTargetHandle, TextureHandle, TextureParams};
 pub use particle::{ParticleConfig, ParticleEmitter, ParticleSystem};
 pub use post_process::PostEffect;

@@ -14,6 +14,9 @@ fn make_params(font: FontHandle, size: f32) -> TextParams {
         max_width: None,
         line_height: None,
         z: 0,
+        letter_spacing: None,
+        underline: false,
+        strikethrough: false,
     }
 }
 

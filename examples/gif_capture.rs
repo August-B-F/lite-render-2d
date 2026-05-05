@@ -63,11 +63,13 @@ fn render_scene(
             font: f, size: 18.0, color: Color::new(0.9, 0.9, 0.95, 1.0),
             align: TextAlign::Left, position: Vec2::new(12.0, 7.0),
             max_width: None, line_height: None, z: 0,
+            letter_spacing: None, underline: false, strikethrough: false,
         });
         ren.draw_text("feature showcase", &TextParams {
             font: f, size: 12.0, color: Color::new(0.5, 0.5, 0.6, 1.0),
             align: TextAlign::Left, position: Vec2::new(200.0, 11.0),
             max_width: None, line_height: None, z: 0,
+            letter_spacing: None, underline: false, strikethrough: false,
         });
     }
 
@@ -190,6 +192,7 @@ fn render_scene(
                 font: f, size: 10.0, color: Color::new(0.6, 0.6, 0.7, 0.8),
                 align: TextAlign::Left, position: Vec2::new(lx, ly),
                 max_width: None, line_height: None, z: 0,
+                letter_spacing: None, underline: false, strikethrough: false,
             });
         }
     }
@@ -203,11 +206,13 @@ fn render_scene(
             font: f, size: 14.0, color: Color::new(0.85, 0.75, 0.5, alpha),
             align: TextAlign::Center, position: Vec2::new(0.0, h - 32.0),
             max_width: Some(w), line_height: None, z: 0,
+            letter_spacing: None, underline: false, strikethrough: false,
         });
         ren.draw_text("- Frank Herbert, Dune", &TextParams {
             font: f, size: 10.0, color: Color::new(0.5, 0.45, 0.35, alpha * 0.7),
             align: TextAlign::Center, position: Vec2::new(0.0, h - 14.0),
             max_width: Some(w), line_height: None, z: 0,
+            letter_spacing: None, underline: false, strikethrough: false,
         });
     }
 }

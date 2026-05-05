@@ -6,7 +6,7 @@
 
 pub use crate::camera::Camera2D;
 pub use crate::renderer::{Renderer, RendererError};
-pub use crate::text::{FontHandle, TextAlign, TextParams};
+pub use crate::text::{FontHandle, GlyphPosition, TextAlign, TextLayout, TextParams};
 pub use crate::atlas::AtlasRegion;
 pub use crate::texture::{AtlasHandle, TextureHandle, TextureParams};
 pub use crate::types::{
