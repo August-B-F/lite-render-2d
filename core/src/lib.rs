@@ -1,6 +1,6 @@
 //! # lite-render-2d
 //!
-//! lightweight 2d rendering in rust. 100k sprites, 16MB RAM, 2 draw calls.
+//! lightweight 2d rendering in rust. 100k sprites, 1 draw call, 30 MB RAM.
 //!
 //! ## quick start
 //!

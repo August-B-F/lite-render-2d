@@ -170,9 +170,7 @@ fn test_color_partial_eq() {
     assert_ne!(Color::RED, Color::BLUE);
 }
 
-// ============================
 // Vec2 tests
-// ============================
 
 #[test]
 fn test_vec2_new() {
@@ -380,9 +378,7 @@ fn test_vec2_lerp_midpoint() {
     assert!((v.y - 10.0).abs() < 1e-6);
 }
 
-// ============================
 // Rect tests
-// ============================
 
 #[test]
 fn test_rect_new() {
@@ -423,9 +419,7 @@ fn test_rect_partial_eq() {
     assert_eq!(a, b);
 }
 
-// ============================
 // Transform2D tests
-// ============================
 
 #[test]
 fn test_transform2d_new() {

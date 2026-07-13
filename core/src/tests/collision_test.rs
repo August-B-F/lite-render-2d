@@ -1,9 +1,7 @@
 use crate::collision::*;
 use crate::types::{Rect, Vec2};
 
-// ============================
 // Rect::contains
-// ============================
 
 #[test]
 fn test_rect_contains_point_inside() {
@@ -30,9 +28,7 @@ fn test_rect_contains_point_on_edge() {
     assert!(r.contains(Vec2::new(0.0, 100.0)));
 }
 
-// ============================
 // Rect::intersects
-// ============================
 
 #[test]
 fn test_rect_intersects_overlapping() {
@@ -65,9 +61,7 @@ fn test_rect_intersects_contained() {
     assert!(inner.intersects(&outer));
 }
 
-// ============================
 // circle_contains
-// ============================
 
 #[test]
 fn test_circle_contains_center() {
@@ -90,9 +84,7 @@ fn test_circle_contains_on_edge() {
     assert!(circle_contains(Vec2::new(0.0, 0.0), 5.0, Vec2::new(5.0, 0.0)));
 }
 
-// ============================
 // circle_intersects_rect
-// ============================
 
 #[test]
 fn test_circle_rect_overlap() {
@@ -122,9 +114,7 @@ fn test_circle_rect_corner_case() {
     assert!(!circle_intersects_rect(Vec2::new(108.0, 108.0), 10.0, &r));
 }
 
-// ============================
 // point_in_polygon
-// ============================
 
 #[test]
 fn test_point_in_convex_polygon() {
@@ -173,9 +163,7 @@ fn test_point_in_polygon_too_few_verts() {
     assert!(!point_in_polygon(Vec2::new(0.0, 0.0), &[Vec2::ZERO, Vec2::ONE]));
 }
 
-// ============================
 // line_intersects_line
-// ============================
 
 #[test]
 fn test_lines_crossing() {
